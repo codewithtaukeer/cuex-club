@@ -18,11 +18,13 @@ import {
   CheckCircle2,
   X,
   ShieldCheck,
+  Ticket,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import type { CuexBooking, CuexResource, CuexBlockedPeriod, CuexOpeningHour, CuexVenueSettings } from '../types';
 import { formatToIST, formatDateIST, formatINR, getISTDateString } from '../lib/utils';
+import { BookingInvoiceModal } from '../components/booking/BookingInvoiceModal';
 
 export const AdminDashboardPage: React.FC = () => {
   const { user, isAdmin, loading: authLoading } = useAuth();
@@ -64,6 +66,7 @@ export const AdminDashboardPage: React.FC = () => {
 
   // Status message
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [activePassBooking, setActivePassBooking] = useState<CuexBooking | null>(null);
 
   useEffect(() => {
     if (!authLoading && (!user || !isAdmin)) {
@@ -861,6 +864,14 @@ export const AdminDashboardPage: React.FC = () => {
                       {b.status === 'confirmed' && (
                         <>
                           <button
+                            onClick={() => setActivePassBooking(b)}
+                            className="px-3 py-1.5 rounded-lg bg-champagne/15 border border-champagne/40 text-champagne text-xs font-bold hover:bg-champagne/25 flex items-center gap-1 shadow-sm"
+                            title="View and print official entry pass / token invoice for this customer"
+                          >
+                            <Ticket className="w-3.5 h-3.5" />
+                            Pass / Invoice
+                          </button>
+                          <button
                             onClick={() => handleMakeTableFree(b)}
                             className="px-3 py-1.5 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-300 text-xs font-bold hover:bg-amber-500/30 flex items-center gap-1 shadow-sm"
                             title="Cancel reservation and reopen slot immediately for other players"
@@ -1414,6 +1425,13 @@ export const AdminDashboardPage: React.FC = () => {
               </form>
             </div>
           </div>
+        )}
+        {/* Official Booking Pass & Invoice Modal */}
+        {activePassBooking && (
+          <BookingInvoiceModal
+            booking={activePassBooking}
+            onClose={() => setActivePassBooking(null)}
+          />
         )}
       </div>
     </div>

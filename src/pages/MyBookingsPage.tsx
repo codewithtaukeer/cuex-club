@@ -1,15 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Calendar, MessageSquare, ArrowRight, Phone, HelpCircle } from 'lucide-react';
+import { Calendar, MessageSquare, ArrowRight, Phone, HelpCircle, Ticket } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import type { CuexBooking } from '../types';
 import { formatToIST, formatDateIST, formatINR, generateBookingWhatsAppLink, generateGoogleCalendarUrl, VENUE_INFO } from '../lib/utils';
+import { BookingInvoiceModal } from '../components/booking/BookingInvoiceModal';
 
 export const MyBookingsPage: React.FC = () => {
   const { user } = useAuth();
   const [bookings, setBookings] = useState<CuexBooking[]>([]);
   const [loading, setLoading] = useState(false);
+  const [selectedInvoiceBooking, setSelectedInvoiceBooking] = useState<CuexBooking | null>(null);
   const [phoneLookup, setPhoneLookup] = useState<string>(() => {
     try {
       return localStorage.getItem('cuex_guest_phone') || '';
@@ -271,6 +273,17 @@ export const MyBookingsPage: React.FC = () => {
                   {/* Actions Bar */}
                   <div className="pt-4 flex flex-wrap items-center justify-between gap-3">
                     <div className="flex flex-wrap items-center gap-2">
+                      {/* Token / Invoice button for confirmed or completed bookings */}
+                      {(booking.status === 'confirmed' || booking.status === 'completed') && (
+                        <button
+                          onClick={() => setSelectedInvoiceBooking(booking)}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-champagne/20 via-warmgold/20 to-champagne/20 border border-champagne/50 text-champagne text-xs font-bold hover:bg-champagne/30 shadow-[0_0_15px_rgba(214,167,84,0.2)] transition-all"
+                        >
+                          <Ticket className="w-3.5 h-3.5" />
+                          <span>Download Pass / Invoice</span>
+                        </button>
+                      )}
+
                       <a
                         href={waLink}
                         target="_blank"
@@ -325,6 +338,14 @@ export const MyBookingsPage: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Invoice & Entry Pass Modal */}
+      {selectedInvoiceBooking && (
+        <BookingInvoiceModal
+          booking={selectedInvoiceBooking}
+          onClose={() => setSelectedInvoiceBooking(null)}
+        />
+      )}
     </div>
   );
 };

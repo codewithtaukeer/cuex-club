@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import confetti from 'canvas-confetti';
-import { CheckCircle2, Clock, MessageSquare, Calendar as CalendarIcon, Phone, ArrowRight, RefreshCw, XCircle } from 'lucide-react';
+import { CheckCircle2, Clock, MessageSquare, Calendar as CalendarIcon, Phone, ArrowRight, RefreshCw, XCircle, Ticket } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import type { CuexBooking, BookingStatus } from '../../types';
 import { formatToIST, formatDateIST, formatINR, generateBookingWhatsAppLink, generateGoogleCalendarUrl, VENUE_INFO } from '../../lib/utils';
+import { BookingInvoiceModal } from './BookingInvoiceModal';
 
 interface BookingSuccessModalProps {
   booking: CuexBooking;
@@ -15,6 +16,7 @@ export const BookingSuccessModal: React.FC<BookingSuccessModalProps> = ({ bookin
   const navigate = useNavigate();
   const [currentBooking, setCurrentBooking] = useState<CuexBooking>(initialBooking);
   const [status, setStatus] = useState<BookingStatus>(initialBooking.status);
+  const [showInvoice, setShowInvoice] = useState(false);
   const [timeLeft, setTimeLeft] = useState<number>(() => {
     if (!initialBooking.expires_at) return 15 * 60;
     const diff = Math.floor((new Date(initialBooking.expires_at).getTime() - Date.now()) / 1000);
@@ -250,6 +252,17 @@ export const BookingSuccessModal: React.FC<BookingSuccessModalProps> = ({ bookin
 
         {/* Action Buttons */}
         <div className="space-y-3">
+          {/* Prominent Download Pass / Invoice Button if Confirmed */}
+          {isConfirmed && (
+            <button
+              onClick={() => setShowInvoice(true)}
+              className="w-full py-3.5 rounded-xl bg-gradient-to-r from-champagne via-warmgold to-champagne text-obsidian font-extrabold text-xs uppercase tracking-widest flex items-center justify-center gap-2 shadow-gold-glow hover:shadow-gold-glow-lg transition-transform active:scale-98"
+            >
+              <Ticket className="w-4 h-4" />
+              <span>Download Official Pass & Token</span>
+            </button>
+          )}
+
           {isPending && (
             <button
               onClick={handleManualRefresh}
@@ -318,6 +331,14 @@ export const BookingSuccessModal: React.FC<BookingSuccessModalProps> = ({ bookin
           </div>
         </div>
       </div>
+
+      {/* Booking Invoice & Pass Modal */}
+      {showInvoice && (
+        <BookingInvoiceModal
+          booking={currentBooking}
+          onClose={() => setShowInvoice(false)}
+        />
+      )}
     </div>
   );
 };
