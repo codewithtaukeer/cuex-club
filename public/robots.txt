@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /my-bookings
+
+Sitemap: https://cuex.in/sitemap.xml

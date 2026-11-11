@@ -1,0 +1,92 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg-obsidian: #080909;
+    --bg-charcoal: #151716;
+    --gold-champagne: #D6A754;
+    --gold-warm: #F4C979;
+    --emerald-felt: #08784D;
+    --emerald-deep: #063A2C;
+  }
+
+  body {
+    background-color: #080909;
+    color: #E9E3D6;
+    font-family: 'Manrope', sans-serif;
+    overflow-x: hidden;
+  }
+
+  /* Hide default arrow cursor on desktop so only the custom cue ball cursor shows */
+  @media (pointer: fine) {
+    html, body, button, a, input, select, textarea, [role="button"], * {
+      cursor: none !important;
+    }
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #080909;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #2a2c2b;
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #D6A754;
+  }
+}
+
+/* Glassmorphism surfaces */
+.glass-panel {
+  background: rgba(21, 23, 22, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(214, 167, 84, 0.15);
+}
+
+.glass-panel-gold {
+  background: linear-gradient(135deg, rgba(21, 23, 22, 0.85) 0%, rgba(15, 16, 15, 0.95) 100%);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(214, 167, 84, 0.25);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.6);
+}
+
+.glass-panel-emerald {
+  background: linear-gradient(135deg, rgba(6, 58, 44, 0.6) 0%, rgba(8, 9, 9, 0.85) 100%);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(8, 120, 77, 0.3);
+}
+
+/* Gold Gradient Text */
+.text-gold-gradient {
+  background: linear-gradient(135deg, #F4C979 0%, #D6A754 50%, #A87D32 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.text-emerald-gradient {
+  background: linear-gradient(135deg, #10B981 0%, #08784D 50%, #063A2C 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Subtle gold border highlight */
+.gold-border-glow {
+  border: 1px solid rgba(214, 167, 84, 0.3);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.gold-border-glow:hover {
+  border-color: rgba(244, 201, 121, 0.7);
+  box-shadow: 0 0 20px rgba(214, 167, 84, 0.2);
+}
+
+/* Mobile safe area padding */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 1rem);
+}
