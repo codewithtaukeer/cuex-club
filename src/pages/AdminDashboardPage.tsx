@@ -19,12 +19,21 @@ import {
   X,
   ShieldCheck,
   Ticket,
+  Volume2,
+  VolumeX,
+  BellRing,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import type { CuexBooking, CuexResource, CuexBlockedPeriod, CuexOpeningHour, CuexVenueSettings } from '../types';
 import { formatToIST, formatDateIST, formatINR, getISTDateString } from '../lib/utils';
 import { BookingInvoiceModal } from '../components/booking/BookingInvoiceModal';
+import { 
+  playWhatsAppSound, 
+  primeAudioContext, 
+  requestNotificationPermission, 
+  showBrowserNotification 
+} from '../lib/notificationSound';
 
 export const AdminDashboardPage: React.FC = () => {
   const { user, isAdmin, loading: authLoading } = useAuth();
@@ -67,6 +76,37 @@ export const AdminDashboardPage: React.FC = () => {
   // Status message
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [activePassBooking, setActivePassBooking] = useState<CuexBooking | null>(null);
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('cuex_admin_sound') !== 'false';
+    } catch {
+      return true;
+    }
+  });
+  const [incomingAlert, setIncomingAlert] = useState<CuexBooking | null>(null);
+
+  const handleTestSound = () => {
+    primeAudioContext();
+    playWhatsAppSound();
+    requestNotificationPermission();
+    setFeedbackMsg({
+      type: 'success',
+      text: '🔊 WhatsApp alert tone tested! Sound notifications are fully primed and active on this device.',
+    });
+  };
+
+  const toggleSound = () => {
+    const next = !soundEnabled;
+    setSoundEnabled(next);
+    try {
+      localStorage.setItem('cuex_admin_sound', String(next));
+    } catch {}
+    if (next) {
+      primeAudioContext();
+      playWhatsAppSound();
+      requestNotificationPermission();
+    }
+  };
 
   useEffect(() => {
     if (!authLoading && (!user || !isAdmin)) {
@@ -124,19 +164,39 @@ export const AdminDashboardPage: React.FC = () => {
     }
   }, [isAdmin]);
 
-  // Realtime subscription for admin bookings
+  // Realtime subscription for admin bookings with instant WhatsApp chime notification
   useEffect(() => {
     if (!isAdmin) return;
     const channel = supabase
       .channel('cuex-admin-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'cuex_bookings' }, () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'cuex_bookings' }, (payload) => {
+        // Trigger alert on new booking request or status change to pending_confirmation
+        if (payload.eventType === 'INSERT') {
+          const newBooking = payload.new as CuexBooking;
+          if (soundEnabled) {
+            playWhatsAppSound();
+          }
+          setIncomingAlert(newBooking);
+          showBrowserNotification('🎱 New CueX Booking Request!', {
+            body: `${newBooking.customer_name} requested a slot (${newBooking.booking_reference})! Tap to review.`,
+          });
+        } else if (payload.eventType === 'UPDATE') {
+          const updated = payload.new as CuexBooking;
+          const old = payload.old as Partial<CuexBooking>;
+          if (updated.status === 'pending_confirmation' && old?.status !== 'pending_confirmation') {
+            if (soundEnabled) {
+              playWhatsAppSound();
+            }
+            setIncomingAlert(updated);
+          }
+        }
         loadAllAdminData();
       })
       .subscribe();
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [isAdmin]);
+  }, [isAdmin, soundEnabled]);
 
   // Admin Confirm Booking Request
   const handleConfirmBookingRequest = async (b: CuexBooking) => {
@@ -482,6 +542,106 @@ export const AdminDashboardPage: React.FC = () => {
             </button>
           </div>
         </div>
+
+        {/* Realtime Sound Alert & Notification Control Bar */}
+        <div className="mb-6 p-3.5 sm:p-4 rounded-2xl bg-charcoal/90 border border-champagne/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg">
+          <div className="flex items-center gap-3">
+            <div className={`p-2.5 rounded-xl border ${soundEnabled ? 'bg-cuexemerald/15 border-cuexemerald/40 text-emerald-400' : 'bg-red-500/10 border-red-500/30 text-red-400'}`}>
+              {soundEnabled ? <Volume2 className="w-5 h-5 animate-pulse" /> : <VolumeX className="w-5 h-5" />}
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-warmivory">
+                  Live Booking Sound Alerts:
+                </span>
+                <span className={`text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full ${soundEnabled ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-red-500/20 text-red-400 border border-red-500/30'}`}>
+                  {soundEnabled ? 'ACTIVE (WhatsApp Chime)' : 'MUTED'}
+                </span>
+              </div>
+              <p className="text-[11px] text-mutedgrey mt-0.5">
+                Plays a loud WhatsApp-style chime on your phone or laptop whenever a customer submits a booking request.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={handleTestSound}
+              className="px-3.5 py-2 rounded-xl bg-champagne text-obsidian text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 hover:bg-warmgold shadow-gold-glow transition-all"
+              title="Test WhatsApp notification chime now"
+            >
+              <Volume2 className="w-3.5 h-3.5" />
+              <span>Test Sound</span>
+            </button>
+
+            <button
+              onClick={toggleSound}
+              className={`px-3 py-2 rounded-xl border text-xs font-semibold uppercase tracking-wider transition-all flex items-center gap-1.5 ${
+                soundEnabled 
+                  ? 'bg-obsidian border-white/10 text-mutedgrey hover:text-warmivory' 
+                  : 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
+              }`}
+            >
+              {soundEnabled ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+              <span>{soundEnabled ? 'Mute' : 'Enable Sound'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Incoming Booking Alert Pop-up Banner */}
+        {incomingAlert && (
+          <div className="mb-6 p-4 rounded-2xl bg-gradient-to-r from-amber-500/25 via-charcoal to-obsidian border-2 border-amber-400 shadow-[0_0_35px_rgba(245,158,11,0.35)] flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-in slide-in-from-top-3 duration-300">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/40 shrink-0 mt-0.5 animate-bounce">
+                <BellRing className="w-6 h-6" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-display text-lg text-amber-300 uppercase tracking-wide">
+                    NEW BOOKING REQUEST RECEIVED!
+                  </span>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/30">
+                    {incomingAlert.booking_reference}
+                  </span>
+                </div>
+                <p className="text-xs text-warmivory mt-0.5">
+                  <strong>{incomingAlert.customer_name}</strong> ({incomingAlert.customer_phone}) requested{' '}
+                  <span className="text-champagne font-bold uppercase">{incomingAlert.resource_id}</span> •{' '}
+                  {formatDateIST(incomingAlert.start_at)} at {formatToIST(incomingAlert.start_at)}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                onClick={() => {
+                  handleConfirmBookingRequest(incomingAlert);
+                  setIncomingAlert(null);
+                }}
+                className="px-4 py-2 rounded-xl bg-[#107c41] hover:bg-[#138e4a] text-white text-xs font-bold uppercase tracking-wider shadow-md transition-all active:scale-98"
+              >
+                Confirm Now
+              </button>
+              <button
+                onClick={() => {
+                  setActiveTab('bookings');
+                  setStatusFilter('pending_confirmation');
+                  setIncomingAlert(null);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-charcoal border border-champagne/40 text-champagne text-xs font-bold uppercase tracking-wider hover:bg-champagne/15 transition-all"
+              >
+                View Request
+              </button>
+              <button
+                onClick={() => setIncomingAlert(null)}
+                className="p-2 rounded-xl bg-charcoal border border-white/10 text-mutedgrey hover:text-warmivory transition-colors"
+                title="Dismiss Alert"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Feedback Alert */}
         {feedbackMsg && (
