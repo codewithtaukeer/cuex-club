@@ -305,6 +305,31 @@ export const AdminDashboardPage: React.FC = () => {
   const handleMarkDateClosed = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!holidayDate) return;
+
+    // Check for conflicting active bookings on this date
+    const conflicts = bookings.filter(b => {
+      const bDate = getISTDateString(new Date(b.start_at));
+      const isActive = b.status === 'confirmed' || b.status === 'pending_confirmation' || b.status === 'pending';
+      return bDate === holidayDate && isActive;
+    });
+
+    if (conflicts.length > 0) {
+      const details = conflicts
+        .slice(0, 5)
+        .map(b => `• ${b.customer_name} (${b.resource_id.toUpperCase()} at ${formatToIST(b.start_at)}) [Ref: ${b.booking_reference}]`)
+        .join('\n');
+      const moreText = conflicts.length > 5 ? `\n...and ${conflicts.length - 5} more booking(s)` : '';
+
+      const proceed = window.confirm(
+        `⚠️ WARNING: There are ${conflicts.length} active booking(s) on ${formatDateIST(holidayDate)}:\n\n` +
+        `${details}${moreText}\n\n` +
+        `Marking this day off will block the entire venue and conflict with these customer reservations.\n\n` +
+        `Do you still want to proceed and mark this day off?`
+      );
+
+      if (!proceed) return;
+    }
+
     setSavingHoliday(true);
     try {
       const startAt = `${holidayDate}T00:00:00+05:30`;
@@ -323,6 +348,19 @@ export const AdminDashboardPage: React.FC = () => {
       setFeedbackMsg({ type: 'error', text: err.message || 'Failed to mark date closed.' });
     } finally {
       setSavingHoliday(false);
+    }
+  };
+
+  // Cancel Day-Off / Re-open Club
+  const handleCancelDayOff = async (blockId: string, dateLabel: string) => {
+    if (!window.confirm(`Re-open club on ${dateLabel}? This will remove the day-off blackout and allow customer reservations again.`)) return;
+    try {
+      const { error } = await supabase.from('cuex_blocked_periods').delete().eq('id', blockId);
+      if (error) throw error;
+      setFeedbackMsg({ type: 'success', text: `✅ Decision cancelled! Venue re-opened for ${dateLabel}.` });
+      loadAllAdminData();
+    } catch (err: any) {
+      setFeedbackMsg({ type: 'error', text: err.message || 'Failed to re-open club.' });
     }
   };
 
@@ -1918,6 +1956,41 @@ export const AdminDashboardPage: React.FC = () => {
                   </div>
                 </div>
               </form>
+
+              {/* Currently Closed Dates / Marked Holidays */}
+              {blockedPeriods.filter(bp => bp.resource_id === null).length > 0 && (
+                <div className="p-5 rounded-2xl bg-red-500/10 border border-red-500/30 space-y-4">
+                  <div>
+                    <h4 className="font-display text-lg text-red-300 uppercase tracking-wide">
+                      Currently Closed Dates & Holidays ({blockedPeriods.filter(bp => bp.resource_id === null).length})
+                    </h4>
+                    <p className="text-xs text-mutedgrey mt-0.5">
+                      You can take back your decision and re-open the club anytime.
+                    </p>
+                  </div>
+                  <div className="space-y-2.5">
+                    {blockedPeriods.filter(bp => bp.resource_id === null).map((d) => (
+                      <div
+                        key={d.id}
+                        className="p-4 rounded-xl bg-obsidian border border-red-500/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                      >
+                        <div>
+                          <p className="font-bold text-warmivory text-sm">{formatDateIST(d.start_at)}</p>
+                          <p className="text-xs text-mutedgrey">{d.reason || 'Club Full-Day Closure'}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleCancelDayOff(d.id, formatDateIST(d.start_at))}
+                          className="px-4 py-2 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30 text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 transition-all self-start sm:self-auto"
+                        >
+                          <Unlock className="w-4 h-4" />
+                          <span>Re-open Club / Cancel Day-Off</span>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Weekly Schedule Toggles */}
               <div className="space-y-3">

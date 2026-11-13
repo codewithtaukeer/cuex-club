@@ -102,7 +102,7 @@ export interface CuexBlockedPeriod {
 export interface AvailabilitySlot {
   slot_start: string;
   slot_end: string;
-  slot_status: 'available' | 'booked' | 'blocked' | 'past';
+  slot_status: 'available' | 'booked' | 'blocked' | 'past' | 'held' | 'closed' | string;
   calculated_price: number;
 }
 

@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
-import type { CuexBooking, CuexResource, CuexBlockedPeriod, CuexOpeningHour } from '../types';
+import type { CuexBooking, CuexResource, CuexBlockedPeriod, CuexOpeningHour, AvailabilitySlot } from '../types';
 import { formatToIST, formatDateIST, formatINR, getISTDateString } from '../lib/utils';
 import { BookingInvoiceModal } from '../components/booking/BookingInvoiceModal';
 import {
@@ -91,6 +91,14 @@ export const AdminAppPage: React.FC = () => {
   const [collectionEndDate, setCollectionEndDate] = useState<string>('');
   const [selectedDayDetail, setSelectedDayDetail] = useState<string | null>(null);
 
+  // Hourly Schedule / Slot Status state (8 AM to 3 AM)
+  const [bookingViewMode, setBookingViewMode] = useState<'list' | 'hourly'>('list');
+  const [scheduleResource, setScheduleResource] = useState<'pool' | 'snooker' | 'ps5'>('pool');
+  const [scheduleDate, setScheduleDate] = useState<string>(getISTDateString());
+  const [scheduleDuration, setScheduleDuration] = useState<number>(60);
+  const [scheduleSlots, setScheduleSlots] = useState<AvailabilitySlot[]>([]);
+  const [loadingSchedule, setLoadingSchedule] = useState<boolean>(false);
+
   // Manual booking form state
   const [manualResource, setManualResource] = useState<'ps5' | 'pool' | 'snooker'>('pool');
   const [manualName, setManualName] = useState('Walk-in Customer');
@@ -139,6 +147,29 @@ export const AdminAppPage: React.FC = () => {
   }, []);
 
   // ─── Load Data ────────────────────────────────────────────────────────────
+  const fetchSchedule = useCallback(async () => {
+    setLoadingSchedule(true);
+    try {
+      const { data, error } = await supabase.rpc('cuex_get_resource_availability', {
+        p_resource_id: scheduleResource,
+        p_date: scheduleDate,
+        p_duration_minutes: scheduleDuration,
+      });
+      if (error) throw error;
+      setScheduleSlots((data as AvailabilitySlot[]) || []);
+    } catch (err) {
+      console.error('Error fetching schedule slots:', err);
+    } finally {
+      setLoadingSchedule(false);
+    }
+  }, [scheduleResource, scheduleDate, scheduleDuration]);
+
+  useEffect(() => {
+    if (isAdmin) {
+      fetchSchedule();
+    }
+  }, [isAdmin, fetchSchedule]);
+
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
@@ -152,12 +183,13 @@ export const AdminAppPage: React.FC = () => {
       if (rRes.data) setResources(rRes.data as CuexResource[]);
       if (bpRes.data) setBlockedPeriods(bpRes.data as CuexBlockedPeriod[]);
       if (ohRes.data) setOpeningHours(ohRes.data as CuexOpeningHour[]);
+      fetchSchedule();
     } catch (err) {
       console.error('Error loading admin data:', err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [fetchSchedule]);
 
   useEffect(() => {
     if (isAdmin) loadData();
@@ -390,6 +422,31 @@ export const AdminAppPage: React.FC = () => {
   const handleMarkDateClosed = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!holidayDate) return;
+
+    // Check for conflicting active bookings on this date
+    const conflicts = bookings.filter(b => {
+      const bDate = getISTDateString(new Date(b.start_at));
+      const isActive = b.status === 'confirmed' || b.status === 'pending_confirmation' || b.status === 'pending';
+      return bDate === holidayDate && isActive;
+    });
+
+    if (conflicts.length > 0) {
+      const details = conflicts
+        .slice(0, 5)
+        .map(b => `• ${b.customer_name} (${resLabel(b.resource_id)} at ${formatToIST(b.start_at)}) [Ref: ${b.booking_reference}]`)
+        .join('\n');
+      const moreText = conflicts.length > 5 ? `\n...and ${conflicts.length - 5} more booking(s)` : '';
+
+      const proceed = window.confirm(
+        `⚠️ WARNING: There are ${conflicts.length} active booking(s) on ${formatDateIST(holidayDate)}:\n\n` +
+        `${details}${moreText}\n\n` +
+        `Marking this day off will block the entire venue and conflict with these customer reservations.\n\n` +
+        `Do you still want to proceed and mark this day off?`
+      );
+
+      if (!proceed) return;
+    }
+
     setSavingHoliday(true);
     try {
       const startAt = `${holidayDate}T00:00:00+05:30`;
@@ -408,6 +465,19 @@ export const AdminAppPage: React.FC = () => {
       showFeedback('error', err.message || 'Failed to mark date closed.');
     } finally {
       setSavingHoliday(false);
+    }
+  };
+
+  // ─── Cancel Day-Off / Re-open Club ────────────────────────────────────────
+  const handleCancelDayOff = async (blockId: string, dateLabel: string) => {
+    if (!window.confirm(`Re-open club on ${dateLabel}? This will remove the day-off blackout and allow customers to book slots again.`)) return;
+    try {
+      const { error } = await supabase.from('cuex_blocked_periods').delete().eq('id', blockId);
+      if (error) throw error;
+      showFeedback('success', `✅ Decision cancelled! Venue re-opened for ${dateLabel}.`);
+      loadData();
+    } catch (err: any) {
+      showFeedback('error', err.message || 'Failed to re-open club.');
     }
   };
 
@@ -800,6 +870,41 @@ export const AdminAppPage: React.FC = () => {
           ))}
         </div>
       </div>
+
+      {/* Live Hourly Slot Schedule Shortcut */}
+      <div className="p-4 rounded-2xl bg-gradient-to-r from-champagne/15 via-white/5 to-champagne/10 border border-champagne/30 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Clock className="w-4 h-4 text-champagne" />
+            <span className="font-bold text-xs uppercase tracking-wider text-warmivory">Live Slot Schedule (8 AM – 3 AM)</span>
+          </div>
+          <button
+            onClick={() => { setTab('bookings'); setBookingViewMode('hourly'); }}
+            className="text-[11px] font-bold text-champagne uppercase tracking-wider flex items-center gap-1 hover:underline"
+          >
+            Full Grid <ChevronRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+        <p className="text-xs text-mutedgrey leading-relaxed">
+          Check live hour-by-hour status for each table, see who is currently playing, and spot free slots for walk-ins.
+        </p>
+        <div className="grid grid-cols-3 gap-2 pt-1">
+          {(['pool', 'snooker', 'ps5'] as const).map(res => (
+            <button
+              key={res}
+              onClick={() => {
+                setScheduleResource(res);
+                setTab('bookings');
+                setBookingViewMode('hourly');
+              }}
+              className="py-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-center text-xs font-semibold text-warmivory flex flex-col items-center gap-0.5 active:scale-95 transition-all"
+            >
+              <span className="text-[10px] uppercase text-champagne font-bold">{res === 'ps5' ? 'PS5' : res === 'pool' ? 'Pool' : 'Snooker'}</span>
+              <span className="text-[9px] text-mutedgrey">Check Hours</span>
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 
@@ -819,41 +924,344 @@ export const AdminAppPage: React.FC = () => {
     </div>
   );
 
-  const BookingsTab = () => (
-    <div className="space-y-4">
-      {/* Search + Filter */}
-      <div className="space-y-2">
-        <div className="relative">
-          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-mutedgrey" />
-          <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
-            placeholder="Search name, phone, reference…" className={`${inputCls} pl-10`} />
-        </div>
-        <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
-          {['all', 'pending_confirmation', 'confirmed', 'completed', 'cancelled', 'no_show'].map(s => (
-            <button key={s} onClick={() => setStatusFilter(s)}
-              className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase whitespace-nowrap border transition-all ${statusFilter === s ? 'bg-champagne text-obsidian border-champagne' : 'bg-white/5 text-mutedgrey border-white/10'}`}>
-              {s === 'all' ? 'All' : s.replace('_', ' ')}
-            </button>
-          ))}
-        </div>
-        <div className="flex items-center justify-between gap-2 pt-1">
-          <span className="text-[11px] text-mutedgrey uppercase font-bold tracking-wider">{filteredBookings.length} booking(s)</span>
-          <button onClick={handleExportCSV} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 text-xs font-semibold text-warmivory hover:text-champagne">
-            <Download className="w-3.5 h-3.5 text-champagne" /> Export CSV
+  const BookingsTab = () => {
+    const freeSlotsCount = scheduleSlots.filter(s => s.slot_status === 'available').length;
+    const bookedSlotsCount = scheduleSlots.filter(s => s.slot_status === 'booked' || s.slot_status === 'held').length;
+    const blockedSlotsCount = scheduleSlots.filter(s => s.slot_status === 'blocked' || s.slot_status === 'closed').length;
+
+    return (
+      <div className="space-y-4">
+        {/* View Mode Toggle: List vs Hourly Schedule */}
+        <div className="grid grid-cols-2 gap-1 p-1 rounded-2xl bg-white/5 border border-white/10">
+          <button
+            onClick={() => setBookingViewMode('list')}
+            className={`py-2 rounded-xl text-xs font-bold uppercase transition-all flex items-center justify-center gap-1.5 ${
+              bookingViewMode === 'list' ? 'bg-champagne text-obsidian shadow-sm' : 'text-mutedgrey hover:text-warmivory'
+            }`}
+          >
+            <Layers className="w-3.5 h-3.5" />
+            Bookings List
+          </button>
+          <button
+            onClick={() => setBookingViewMode('hourly')}
+            className={`py-2 rounded-xl text-xs font-bold uppercase transition-all flex items-center justify-center gap-1.5 ${
+              bookingViewMode === 'hourly' ? 'bg-champagne text-obsidian shadow-sm' : 'text-mutedgrey hover:text-warmivory'
+            }`}
+          >
+            <Clock className="w-3.5 h-3.5" />
+            Hourly Slots (8 AM–3 AM)
           </button>
         </div>
-      </div>
 
-      {/* Results */}
-      {filteredBookings.length === 0 ? (
-        <div className="py-12 text-center text-mutedgrey text-xs">No bookings found.</div>
-      ) : (
-        <div className="space-y-3">
-          {filteredBookings.map(b => <BookingCard key={b.id} b={b} />)}
-        </div>
-      )}
-    </div>
-  );
+        {bookingViewMode === 'list' ? (
+          <>
+            {/* Search + Filter */}
+            <div className="space-y-2">
+              <div className="relative">
+                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-mutedgrey" />
+                <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+                  placeholder="Search name, phone, reference…" className={`${inputCls} pl-10`} />
+              </div>
+              <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
+                {['all', 'pending_confirmation', 'confirmed', 'completed', 'cancelled', 'no_show'].map(s => (
+                  <button key={s} onClick={() => setStatusFilter(s)}
+                    className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase whitespace-nowrap border transition-all ${statusFilter === s ? 'bg-champagne text-obsidian border-champagne' : 'bg-white/5 text-mutedgrey border-white/10'}`}>
+                    {s === 'all' ? 'All' : s.replace('_', ' ')}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center justify-between gap-2 pt-1">
+                <span className="text-[11px] text-mutedgrey uppercase font-bold tracking-wider">{filteredBookings.length} booking(s)</span>
+                <button onClick={handleExportCSV} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 text-xs font-semibold text-warmivory hover:text-champagne">
+                  <Download className="w-3.5 h-3.5 text-champagne" /> Export CSV
+                </button>
+              </div>
+            </div>
+
+            {/* Results */}
+            {filteredBookings.length === 0 ? (
+              <div className="py-12 text-center text-mutedgrey text-xs">No bookings found.</div>
+            ) : (
+              <div className="space-y-3">
+                {filteredBookings.map(b => <BookingCard key={b.id} b={b} />)}
+              </div>
+            )}
+          </>
+        ) : (
+          /* HOURLY SLOT STATUS VIEW (8:00 AM TO 3:00 AM) */
+          <div className="space-y-3.5">
+            {/* Facility Selector */}
+            <div className="grid grid-cols-3 gap-2">
+              {(['pool', 'snooker', 'ps5'] as const).map(r => (
+                <button
+                  key={r}
+                  onClick={() => setScheduleResource(r)}
+                  className={`py-2.5 rounded-xl text-xs font-bold uppercase border transition-all flex items-center justify-center gap-1.5 ${
+                    scheduleResource === r
+                      ? 'bg-champagne text-obsidian border-champagne shadow-sm'
+                      : 'bg-white/5 text-mutedgrey border-white/10'
+                  }`}
+                >
+                  {r === 'pool' && <CircleDot className="w-3.5 h-3.5" />}
+                  {r === 'snooker' && <Trophy className="w-3.5 h-3.5" />}
+                  {r === 'ps5' && <Gamepad2 className="w-3.5 h-3.5" />}
+                  {r === 'ps5' ? 'PS5' : r === 'pool' ? 'Pool' : 'Snooker'}
+                </button>
+              ))}
+            </div>
+
+            {/* Date + Duration Selector */}
+            <div className="p-3.5 rounded-2xl bg-white/4 border border-white/8 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => setScheduleDate(getISTDateString())}
+                    className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase border ${
+                      scheduleDate === getISTDateString() ? 'bg-champagne text-obsidian border-champagne' : 'bg-white/5 text-mutedgrey border-white/10'
+                    }`}
+                  >
+                    Today
+                  </button>
+                  {(() => {
+                    const tmrw = new Date();
+                    tmrw.setDate(tmrw.getDate() + 1);
+                    const tmrwStr = getISTDateString(tmrw);
+                    return (
+                      <button
+                        onClick={() => setScheduleDate(tmrwStr)}
+                        className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase border ${
+                          scheduleDate === tmrwStr ? 'bg-champagne text-obsidian border-champagne' : 'bg-white/5 text-mutedgrey border-white/10'
+                        }`}
+                      >
+                        Tomorrow
+                      </button>
+                    );
+                  })()}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input
+                    type="date"
+                    value={scheduleDate}
+                    onChange={e => setScheduleDate(e.target.value)}
+                    className="px-2.5 py-1 rounded-lg bg-black/40 border border-white/10 text-xs text-warmivory outline-none focus:border-champagne"
+                  />
+                  <button
+                    onClick={fetchSchedule}
+                    className="p-1.5 rounded-lg bg-white/5 border border-white/10 text-mutedgrey hover:text-warmivory"
+                    title="Refresh Slots"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${loadingSchedule ? 'animate-spin text-champagne' : ''}`} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Duration filter */}
+              <div className="flex items-center justify-between text-xs pt-1 border-t border-white/5">
+                <span className="text-[10px] text-mutedgrey uppercase font-semibold">Slot Mode:</span>
+                <div className="flex gap-1.5">
+                  <button
+                    onClick={() => setScheduleDuration(60)}
+                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase border ${
+                      scheduleDuration === 60 ? 'bg-champagne text-obsidian border-champagne' : 'bg-white/5 text-mutedgrey border-white/10'
+                    }`}
+                  >
+                    60m (Hourly)
+                  </button>
+                  <button
+                    onClick={() => setScheduleDuration(30)}
+                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase border ${
+                      scheduleDuration === 30 ? 'bg-champagne text-obsidian border-champagne' : 'bg-white/5 text-mutedgrey border-white/10'
+                    }`}
+                  >
+                    30m (Game / Frame)
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Quick Status Bar */}
+            <div className="grid grid-cols-3 gap-2 text-center text-xs">
+              <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
+                <span className="text-[10px] text-emerald-400 uppercase font-bold block">Free Slots</span>
+                <span className="font-display text-xl text-emerald-400">{freeSlotsCount}</span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20">
+                <span className="text-[10px] text-amber-400 uppercase font-bold block">Booked / Held</span>
+                <span className="font-display text-xl text-amber-400">{bookedSlotsCount}</span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-red-500/10 border border-red-500/20">
+                <span className="text-[10px] text-red-400 uppercase font-bold block">Blocked / Off</span>
+                <span className="font-display text-xl text-red-400">{blockedSlotsCount}</span>
+              </div>
+            </div>
+
+            {/* Slots List (8:00 AM to 3:00 AM) */}
+            {loadingSchedule ? (
+              <div className="py-12 flex flex-col items-center justify-center gap-2 text-mutedgrey text-xs">
+                <RefreshCw className="w-6 h-6 animate-spin text-champagne" />
+                <span>Checking hours for {resLabel(scheduleResource)}...</span>
+              </div>
+            ) : scheduleSlots.length === 0 ? (
+              <div className="py-12 rounded-2xl bg-white/3 border border-white/5 text-center text-mutedgrey text-xs">
+                No slots found for this date. The club may be closed or schedule not loaded.
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {scheduleSlots.map((slot, idx) => {
+                  const slotStartMs = new Date(slot.slot_start).getTime();
+                  const slotEndMs = new Date(slot.slot_end).getTime();
+                  const matchingBooking = bookings.find(b => {
+                    if (b.resource_id !== scheduleResource) return false;
+                    if (b.status === 'cancelled' || b.status === 'rejected' || b.status === 'no_show') return false;
+                    const bStartMs = new Date(b.start_at).getTime();
+                    const bEndMs = new Date(b.end_at).getTime();
+                    return bStartMs < slotEndMs && bEndMs > slotStartMs;
+                  });
+
+                  const isAvailable = slot.slot_status === 'available';
+                  const isBooked = slot.slot_status === 'booked' || matchingBooking?.status === 'confirmed';
+                  const isHeld = slot.slot_status === 'held' || matchingBooking?.status === 'pending_confirmation' || matchingBooking?.status === 'pending';
+                  const isBlocked = slot.slot_status === 'blocked';
+                  const isClosed = slot.slot_status === 'closed';
+                  const isPast = slot.slot_status === 'past';
+
+                  return (
+                    <div
+                      key={idx}
+                      className={`p-3.5 rounded-2xl border transition-all ${
+                        isAvailable
+                          ? 'bg-emerald-500/5 border-emerald-500/30'
+                          : isBooked
+                          ? 'bg-amber-500/10 border-amber-500/40'
+                          : isHeld
+                          ? 'bg-orange-500/10 border-orange-500/30'
+                          : isBlocked
+                          ? 'bg-red-500/10 border-red-500/30'
+                          : isClosed
+                          ? 'bg-zinc-800/40 border-white/5 opacity-60'
+                          : 'bg-white/2 border-white/5 opacity-50'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        {/* Time & Slot Title */}
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-warmivory text-sm">
+                              {formatToIST(slot.slot_start)} – {formatToIST(slot.slot_end)}
+                            </span>
+                            {isAvailable && (
+                              <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                                FREE
+                              </span>
+                            )}
+                            {isBooked && (
+                              <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                                BOOKED
+                              </span>
+                            )}
+                            {isHeld && (
+                              <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase bg-orange-500/20 text-orange-400 border border-orange-500/30 animate-pulse">
+                                HELD
+                              </span>
+                            )}
+                            {isBlocked && (
+                              <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase bg-red-500/20 text-red-400 border border-red-500/30">
+                                REPAIR / BLOCKED
+                              </span>
+                            )}
+                            {isClosed && (
+                              <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase bg-zinc-700/50 text-zinc-400 border border-zinc-600/30">
+                                CLOSED
+                              </span>
+                            )}
+                            {isPast && (
+                              <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase bg-white/5 text-mutedgrey">
+                                PAST
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Customer / Booking Details */}
+                          {matchingBooking && (
+                            <div className="text-xs text-mutedgrey mt-1 space-y-0.5">
+                              <p className="font-semibold text-warmivory">
+                                {matchingBooking.customer_name}{' '}
+                                <span className="font-mono text-champagne text-[11px]">({matchingBooking.booking_reference})</span>
+                              </p>
+                              <p className="text-[11px] text-mutedgrey">
+                                Tel: <a href={`tel:${matchingBooking.customer_phone}`} className="hover:text-champagne font-mono">{matchingBooking.customer_phone}</a> • Fee: <strong className="text-warmivory">{formatINR(matchingBooking.total_amount)}</strong>
+                              </p>
+                            </div>
+                          )}
+
+                          {isAvailable && (
+                            <p className="text-[11px] text-mutedgrey mt-0.5">
+                              Standard slot rate: <strong className="text-warmivory">{formatINR(slot.calculated_price)}</strong>
+                            </p>
+                          )}
+                        </div>
+
+                        {/* Action buttons */}
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {isAvailable && (
+                            <button
+                              onClick={() => {
+                                const startDate = new Date(slot.slot_start);
+                                const hours = String(startDate.getHours()).padStart(2, '0');
+                                const mins = String(startDate.getMinutes()).padStart(2, '0');
+                                setManualResource(scheduleResource);
+                                setManualDate(scheduleDate);
+                                setManualTime(`${hours}:${mins}`);
+                                setManualDuration(scheduleDuration);
+                                setTab('controls');
+                                setControlsSubTab('walkin');
+                              }}
+                              className="px-3 py-1.5 rounded-xl bg-champagne text-obsidian text-xs font-bold uppercase tracking-wider shadow-sm hover:scale-102 active:scale-95 transition-all"
+                            >
+                              + Walk-in
+                            </button>
+                          )}
+
+                          {matchingBooking && (
+                            <div className="flex items-center gap-1">
+                              <a
+                                href={`tel:${matchingBooking.customer_phone}`}
+                                className="p-2 rounded-xl bg-white/5 text-mutedgrey hover:text-champagne border border-white/10"
+                                title="Call customer"
+                              >
+                                <Phone className="w-3.5 h-3.5" />
+                              </a>
+                              <a
+                                href={`https://wa.me/${matchingBooking.customer_phone.replace(/\D/g, '')}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="p-2 rounded-xl bg-[#25D366]/15 text-[#25D366] border border-[#25D366]/30"
+                                title="WhatsApp customer"
+                              >
+                                <MessageSquare className="w-3.5 h-3.5" />
+                              </a>
+                              <button
+                                onClick={() => setActivePassBooking(matchingBooking)}
+                                className="p-2 rounded-xl bg-champagne/15 text-champagne border border-champagne/30"
+                                title="View pass"
+                              >
+                                <Ticket className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const WalkInTab = () => (
     <form onSubmit={handleManualBook} className="space-y-4">
@@ -1436,6 +1844,36 @@ export const AdminAppPage: React.FC = () => {
               {savingHoliday ? 'Saving…' : 'Mark Club Closed on This Date'}
             </button>
           </form>
+
+          {/* Active Marked Day-Off Closures */}
+          {blockedPeriods.filter(bp => bp.resource_id === null).length > 0 && (
+            <div className="p-4 rounded-2xl bg-red-500/10 border border-red-500/30 space-y-3">
+              <div>
+                <p className="text-xs font-bold text-red-300 uppercase tracking-wide">
+                  Currently Closed Dates ({blockedPeriods.filter(bp => bp.resource_id === null).length})
+                </p>
+                <p className="text-[10px] text-mutedgrey">Tap 'Re-open' anytime to take back your decision</p>
+              </div>
+              <div className="space-y-2">
+                {blockedPeriods.filter(bp => bp.resource_id === null).map(d => (
+                  <div key={d.id} className="p-3 rounded-xl bg-obsidian border border-red-500/20 flex items-center justify-between gap-3">
+                    <div>
+                      <p className="font-bold text-warmivory text-xs">{formatDateIST(d.start_at)}</p>
+                      <p className="text-[10px] text-mutedgrey">{d.reason || 'Full-Day Closure'}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleCancelDayOff(d.id, formatDateIST(d.start_at))}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 hover:bg-emerald-500/30 active:scale-95 transition-all"
+                    >
+                      <Unlock className="w-3.5 h-3.5" />
+                      Re-open
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Weekly Recurring Closed Days */}
           <div className="p-4 rounded-2xl bg-white/4 border border-white/8 space-y-3">
