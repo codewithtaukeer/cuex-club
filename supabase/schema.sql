@@ -153,12 +153,13 @@ CREATE TABLE IF NOT EXISTS public.cuex_contact_messages (
 -- Seed Resources
 INSERT INTO public.cuex_resources (id, name, category, description, hourly_rate, is_active, pricing_details)
 VALUES 
-  ('pool', 'English Pool Table', 'Billiards', '60-minute standard or 30-minute quick match slots on high-precision green baize.', 120, true, '{"hourly": 120, "match": 60}'::jsonb),
-  ('snooker', 'Championship Snooker Table', 'Snooker', 'Tournament-standard snooker table with overhead directional lighting.', 120, true, '{"hourly": 120, "match": 60}'::jsonb),
+  ('pool', 'English Pool Table', 'Billiards', '60-minute standard or 30-minute quick match slots on high-precision green baize.', 120, true, '{"hourly": 120, "match": 40, "per_game": 40}'::jsonb),
+  ('snooker', 'Championship Snooker Table', 'Snooker', 'Tournament-standard snooker table with overhead directional lighting.', 360, true, '{"hourly": 360, "match": 120, "frame": 120}'::jsonb),
   ('ps5', 'PS5 Gaming Station', 'Console Gaming', 'Ultra-HD gaming station with DualSense wireless controllers and next-gen titles.', 149, true, '{"single_player": 149, "two_players": 249}'::jsonb)
 ON CONFLICT (id) DO UPDATE SET
   name = EXCLUDED.name,
-  hourly_rate = EXCLUDED.hourly_rate;
+  hourly_rate = EXCLUDED.hourly_rate,
+  pricing_details = EXCLUDED.pricing_details;
 
 -- Seed Operating Hours (8:00 AM - 3:00 AM Late Night for all 7 days)
 INSERT INTO public.cuex_opening_hours (day_of_week, is_closed, open_time, close_time)
@@ -299,22 +300,45 @@ RETURNS numeric
 LANGUAGE plpgsql
 STABLE
 AS $$
+DECLARE
+  v_res record;
+  v_hourly numeric;
+  v_match numeric;
 BEGIN
+  SELECT hourly_rate, pricing_details INTO v_res
+  FROM public.cuex_resources
+  WHERE id = p_resource_id;
+
   IF p_resource_id = 'ps5' THEN
     IF p_number_of_players >= 2 THEN
       RETURN CASE WHEN p_duration_minutes >= 120 THEN 349 ELSE 249 END;
     ELSE
       RETURN CASE WHEN p_duration_minutes >= 120 THEN 249 ELSE 149 END;
     END IF;
-  ELSE
-    -- Pool or Snooker
+  ELSIF p_resource_id = 'pool' THEN
+    v_hourly := COALESCE(v_res.hourly_rate, 120);
+    v_match := COALESCE((v_res.pricing_details->>'match')::numeric, 40);
+    
     IF p_booking_mode = 'match' OR p_duration_minutes <= 30 THEN
-      RETURN 60;
+      RETURN v_match;
     ELSIF p_duration_minutes >= 120 THEN
-      RETURN 240;
+      RETURN v_hourly * 2;
     ELSE
-      RETURN 120;
+      RETURN v_hourly;
     END IF;
+  ELSIF p_resource_id = 'snooker' THEN
+    v_hourly := COALESCE(v_res.hourly_rate, 360);
+    v_match := COALESCE((v_res.pricing_details->>'match')::numeric, 120);
+    
+    IF p_booking_mode = 'match' OR p_duration_minutes <= 30 THEN
+      RETURN v_match;
+    ELSIF p_duration_minutes >= 120 THEN
+      RETURN v_hourly * (p_duration_minutes / 60.0);
+    ELSE
+      RETURN v_hourly;
+    END IF;
+  ELSE
+    RETURN 120;
   END IF;
 END;
 $$;

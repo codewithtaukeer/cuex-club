@@ -47,7 +47,7 @@ export const GamesSection: React.FC = () => {
       glow: 'shadow-[0_0_30px_rgba(8,120,77,0.2)]',
       pricing: [
         { label: '1 Hour Table Booking', price: '₹120' },
-        { label: 'Single Match (Per Match)', price: '₹60' },
+        { label: 'Single Game (Per Game)', price: '₹40' },
       ],
       features: ['Emerald Green Cloth', 'Precision Balanced Cues', 'Tournament Spec Balls', 'Ample Cueing Clearance'],
       cta: 'BOOK POOL',
@@ -63,8 +63,8 @@ export const GamesSection: React.FC = () => {
       accentColor: 'border-champagne/30 hover:border-champagne/60',
       glow: 'shadow-[0_0_30px_rgba(214,167,84,0.2)]',
       pricing: [
-        { label: '1 Hour Table Booking', price: '₹120' },
-        { label: 'Single Match (Per Match)', price: '₹60' },
+        { label: '1 Hour Table Booking', price: '₹360' },
+        { label: 'Single Frame (Per Frame)', price: '₹120' },
       ],
       features: ['Full Championship Dimensions', 'Directional Canopy Lighting', 'Master Cues & Triangle', 'Rest & Spider Cues Available'],
       cta: 'BOOK SNOOKER',

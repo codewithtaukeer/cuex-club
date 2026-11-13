@@ -76,13 +76,13 @@ export const Footer: React.FC = () => {
               <li>
                 <Link to="/booking?facility=pool" className="hover:text-champagne transition-colors flex items-center justify-between">
                   <span>English Pool Table</span>
-                  <span className="text-[10px] text-champagne/70">₹120/hr • ₹60/match</span>
+                  <span className="text-[10px] text-champagne/70">₹120/hr • ₹40/game</span>
                 </Link>
               </li>
               <li>
                 <Link to="/booking?facility=snooker" className="hover:text-champagne transition-colors flex items-center justify-between">
                   <span>Championship Snooker Table</span>
-                  <span className="text-[10px] text-champagne/70">₹120/hr • ₹60/match</span>
+                  <span className="text-[10px] text-champagne/70">₹360/hr • ₹120/frame</span>
                 </Link>
               </li>
               <li className="pt-2">

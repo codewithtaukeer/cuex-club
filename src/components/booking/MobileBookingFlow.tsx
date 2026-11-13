@@ -118,11 +118,19 @@ export const MobileBookingFlow: React.FC = () => {
       }
       return durationMinutes >= 120 ? 249 : 149;
     }
-    // Pool or Snooker
-    if (bookingMode === 'match' || durationMinutes <= 30) {
-      return 60;
+    if (selectedFacility === 'pool') {
+      if (bookingMode === 'match' || durationMinutes <= 30) {
+        return 40;
+      }
+      return durationMinutes >= 120 ? 240 : 120;
     }
-    return durationMinutes >= 120 ? 240 : 120;
+    if (selectedFacility === 'snooker') {
+      if (bookingMode === 'match' || durationMinutes <= 30) {
+        return 120;
+      }
+      return durationMinutes >= 120 ? 720 : 360;
+    }
+    return 120;
   };
 
   // Submit booking
@@ -267,7 +275,7 @@ export const MobileBookingFlow: React.FC = () => {
                   id: 'pool' as const,
                   title: 'English Pool Table',
                   subtitle: 'Tournament Billiards',
-                  priceText: '₹120/hr • ₹60/match',
+                  priceText: '₹120/hr • ₹40/game',
                   desc: 'Emerald green cloth, precision cues, tournament spec balls',
                   image: '/assets/cuex-interior.jpg',
                   icon: <CircleDot className="w-6 h-6 text-emerald-400" />,
@@ -276,7 +284,7 @@ export const MobileBookingFlow: React.FC = () => {
                   id: 'snooker' as const,
                   title: 'Snooker Table',
                   subtitle: 'Championship Dimensions',
-                  priceText: '₹120/hr • ₹60/match',
+                  priceText: '₹360/hr • ₹120/frame',
                   desc: 'Directional canopy lighting, professional snooker cue set',
                   image: '/assets/cuex-cue-detail.jpg',
                   icon: <Trophy className="w-6 h-6 text-champagne" />,
@@ -440,7 +448,9 @@ export const MobileBookingFlow: React.FC = () => {
                   }`}
                 >
                   <p className="text-xs font-bold text-warmivory">1 Hour Table Booking</p>
-                  <p className="text-[11px] text-champagne font-semibold mt-1">₹120 / Hour</p>
+                  <p className="text-[11px] text-champagne font-semibold mt-1">
+                    {selectedFacility === 'snooker' ? '₹360 / Hour' : '₹120 / Hour'}
+                  </p>
                   <p className="text-[10px] text-mutedgrey mt-0.5">Full table access for 60 mins</p>
                 </button>
 
@@ -455,8 +465,12 @@ export const MobileBookingFlow: React.FC = () => {
                       : 'bg-charcoal border-white/10 text-mutedgrey'
                   }`}
                 >
-                  <p className="text-xs font-bold text-warmivory">Single Match</p>
-                  <p className="text-[11px] text-champagne font-semibold mt-1">₹60 / Match</p>
+                  <p className="text-xs font-bold text-warmivory">
+                    {selectedFacility === 'snooker' ? 'Single Frame' : 'Single Game'}
+                  </p>
+                  <p className="text-[11px] text-champagne font-semibold mt-1">
+                    {selectedFacility === 'snooker' ? '₹120 / Frame' : '₹40 / Game'}
+                  </p>
                   <p className="text-[10px] text-mutedgrey mt-0.5">30 mins game slot</p>
                 </button>
               </div>

@@ -4,12 +4,12 @@ import {
   Calendar, Clock, TrendingUp, Search, Phone, MessageSquare,
   Ban, Download, RefreshCw, Trash2, UserPlus, Unlock, CheckCircle2,
   X, Ticket, Volume2, VolumeX, BellRing, ChevronRight, Home,
-  Layers, LogOut, Settings, Wrench, Plus, AlertTriangle, Check,
-  ArrowLeft, Filter, Bell,
+  Layers, LogOut, Settings, Plus, AlertTriangle, Check,
+  ArrowLeft, Filter, Bell, DollarSign, Sliders, CircleDot, Trophy, Gamepad2,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
-import type { CuexBooking, CuexResource, CuexBlockedPeriod } from '../types';
+import type { CuexBooking, CuexResource, CuexBlockedPeriod, CuexOpeningHour } from '../types';
 import { formatToIST, formatDateIST, formatINR, getISTDateString } from '../lib/utils';
 import { BookingInvoiceModal } from '../components/booking/BookingInvoiceModal';
 import {
@@ -19,7 +19,7 @@ import {
 import { registerServiceWorker, showSwNotification, canInstallPwa, promptPwaInstall, isPwa } from '../lib/pwa';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
-type AdminTab = 'home' | 'pending' | 'bookings' | 'walkin' | 'block' | 'settings';
+type AdminTab = 'home' | 'pending' | 'bookings' | 'collection' | 'controls' | 'settings';
 
 // ─── Status Colour Helper ───────────────────────────────────────────────────
 function statusColour(status: string): string {
@@ -54,6 +54,7 @@ export const AdminAppPage: React.FC = () => {
   const [bookings, setBookings] = useState<CuexBooking[]>([]);
   const [resources, setResources] = useState<CuexResource[]>([]);
   const [blockedPeriods, setBlockedPeriods] = useState<CuexBlockedPeriod[]>([]);
+  const [openingHours, setOpeningHours] = useState<CuexOpeningHour[]>([]);
   const [loading, setLoading] = useState(true);
   const [incomingAlert, setIncomingAlert] = useState<CuexBooking | null>(null);
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -64,6 +65,31 @@ export const AdminAppPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [showInstallBanner, setShowInstallBanner] = useState(false);
+
+  // Controls Sub-tab
+  const [controlsSubTab, setControlsSubTab] = useState<'rates' | 'dayoff' | 'walkin' | 'maintenance'>('rates');
+
+  // Live Price Management state
+  const [pricePoolMatch, setPricePoolMatch] = useState<number>(40);
+  const [pricePoolHourly, setPricePoolHourly] = useState<number>(120);
+  const [priceSnookerMatch, setPriceSnookerMatch] = useState<number>(120);
+  const [priceSnookerHourly, setPriceSnookerHourly] = useState<number>(360);
+  const [pricePs5Single1, setPricePs5Single1] = useState<number>(149);
+  const [pricePs5Single2, setPricePs5Single2] = useState<number>(249);
+  const [pricePs5Two1, setPricePs5Two1] = useState<number>(249);
+  const [pricePs5Two2, setPricePs5Two2] = useState<number>(349);
+  const [savingPrices, setSavingPrices] = useState(false);
+
+  // Day-off / Blackout Date state
+  const [holidayDate, setHolidayDate] = useState<string>(getISTDateString());
+  const [holidayReason, setHolidayReason] = useState<string>('Club Holiday / Full-Day Closure');
+  const [savingHoliday, setSavingHoliday] = useState(false);
+
+  // Day-wise Collection Filter state
+  const [collectionRange, setCollectionRange] = useState<'all' | 'today' | 'yesterday' | '7days' | 'month' | 'custom'>('all');
+  const [collectionStartDate, setCollectionStartDate] = useState<string>('');
+  const [collectionEndDate, setCollectionEndDate] = useState<string>('');
+  const [selectedDayDetail, setSelectedDayDetail] = useState<string | null>(null);
 
   // Manual booking form state
   const [manualResource, setManualResource] = useState<'ps5' | 'pool' | 'snooker'>('pool');
@@ -95,14 +121,16 @@ export const AdminAppPage: React.FC = () => {
   useEffect(() => {
     const t = searchParams.get('tab');
     if (t === 'pending') setTab('pending');
-    else if (t === 'walkin') setTab('walkin');
+    else if (t === 'walkin') {
+      setTab('controls');
+      setControlsSubTab('walkin');
+    }
   }, [searchParams]);
 
   // ─── PWA Setup ────────────────────────────────────────────────────────────
   useEffect(() => {
     registerServiceWorker();
     requestNotificationPermission();
-    // Show install banner if not already installed as PWA
     if (!isPwa() && canInstallPwa()) setShowInstallBanner(true);
     const timer = setTimeout(() => {
       if (!isPwa() && canInstallPwa()) setShowInstallBanner(true);
@@ -114,14 +142,16 @@ export const AdminAppPage: React.FC = () => {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [bRes, rRes, bpRes] = await Promise.all([
+      const [bRes, rRes, bpRes, ohRes] = await Promise.all([
         supabase.from('cuex_bookings').select('*').order('start_at', { ascending: false }),
         supabase.from('cuex_resources').select('*').order('name'),
         supabase.from('cuex_blocked_periods').select('*').order('start_at', { ascending: false }),
+        supabase.from('cuex_opening_hours').select('*').order('day_of_week'),
       ]);
       if (bRes.data) setBookings(bRes.data as CuexBooking[]);
       if (rRes.data) setResources(rRes.data as CuexResource[]);
       if (bpRes.data) setBlockedPeriods(bpRes.data as CuexBlockedPeriod[]);
+      if (ohRes.data) setOpeningHours(ohRes.data as CuexOpeningHour[]);
     } catch (err) {
       console.error('Error loading admin data:', err);
     } finally {
@@ -164,8 +194,11 @@ export const AdminAppPage: React.FC = () => {
   useEffect(() => {
     if (manualResource === 'ps5') {
       setManualAmount(manualPlayers >= 2 ? (manualDuration >= 120 ? 349 : 249) : (manualDuration >= 120 ? 249 : 149));
+    } else if (manualResource === 'snooker') {
+      setManualAmount(manualDuration <= 30 ? 120 : manualDuration >= 120 ? 720 : 360);
     } else {
-      setManualAmount(manualDuration <= 30 ? 60 : manualDuration >= 120 ? 240 : 120);
+      // Pool
+      setManualAmount(manualDuration <= 30 ? 40 : manualDuration >= 120 ? 240 : 120);
     }
   }, [manualResource, manualDuration, manualPlayers]);
 
@@ -293,6 +326,229 @@ export const AdminAppPage: React.FC = () => {
       showFeedback('success', 'Block removed.');
       loadData();
     } catch (err: any) { showFeedback('error', err.message); }
+  };
+
+  // ─── Pricing Sync ──────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (resources.length > 0) {
+      const p = resources.find(r => r.id === 'pool');
+      if (p) {
+        setPricePoolHourly(Number(p.hourly_rate) || 120);
+        setPricePoolMatch(Number(p.pricing_details?.match ?? p.pricing_details?.per_game ?? 40));
+      }
+      const s = resources.find(r => r.id === 'snooker');
+      if (s) {
+        setPriceSnookerHourly(Number(s.hourly_rate) || 360);
+        setPriceSnookerMatch(Number(s.pricing_details?.match ?? s.pricing_details?.frame ?? 120));
+      }
+      const ps = resources.find(r => r.id === 'ps5');
+      if (ps) {
+        setPricePs5Single1(Number(ps.pricing_details?.single_player?.['60'] ?? 149));
+        setPricePs5Single2(Number(ps.pricing_details?.single_player?.['120'] ?? 249));
+        setPricePs5Two1(Number(ps.pricing_details?.two_player?.['60'] ?? 249));
+        setPricePs5Two2(Number(ps.pricing_details?.two_player?.['120'] ?? 349));
+      }
+    }
+  }, [resources]);
+
+  // ─── Save Pricing Changes ─────────────────────────────────────────────────
+  const handleSavePrices = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingPrices(true);
+    try {
+      const { error: errP } = await supabase.from('cuex_resources').update({
+        hourly_rate: pricePoolHourly,
+        pricing_details: { match: pricePoolMatch, per_game: pricePoolMatch, hourly: pricePoolHourly }
+      }).eq('id', 'pool');
+      if (errP) throw errP;
+
+      const { error: errS } = await supabase.from('cuex_resources').update({
+        hourly_rate: priceSnookerHourly,
+        pricing_details: { match: priceSnookerMatch, frame: priceSnookerMatch, hourly: priceSnookerHourly }
+      }).eq('id', 'snooker');
+      if (errS) throw errS;
+
+      const { error: errPs } = await supabase.from('cuex_resources').update({
+        hourly_rate: pricePs5Single1,
+        pricing_details: {
+          single_player: { '60': pricePs5Single1, '120': pricePs5Single2 },
+          two_player: { '60': pricePs5Two1, '120': pricePs5Two2 }
+        }
+      }).eq('id', 'ps5');
+      if (errPs) throw errPs;
+
+      showFeedback('success', 'Prices saved across website and mobile app!');
+      loadData();
+    } catch (err: any) {
+      showFeedback('error', err.message || 'Failed to update pricing.');
+    } finally {
+      setSavingPrices(false);
+    }
+  };
+
+  // ─── Mark Full Day Closed ─────────────────────────────────────────────────
+  const handleMarkDateClosed = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!holidayDate) return;
+    setSavingHoliday(true);
+    try {
+      const startAt = `${holidayDate}T00:00:00+05:30`;
+      const endAt = `${holidayDate}T23:59:59+05:30`;
+      const { error } = await supabase.from('cuex_blocked_periods').insert({
+        resource_id: null,
+        start_at: new Date(startAt).toISOString(),
+        end_at: new Date(endAt).toISOString(),
+        reason: holidayReason.trim() || 'Club Full-Day Closure',
+        created_by: user?.id,
+      });
+      if (error) throw error;
+      showFeedback('success', `Venue closed for ${formatDateIST(startAt)}.`);
+      loadData();
+    } catch (err: any) {
+      showFeedback('error', err.message || 'Failed to mark date closed.');
+    } finally {
+      setSavingHoliday(false);
+    }
+  };
+
+  // ─── Toggle Day-Of-Week ───────────────────────────────────────────────────
+  const handleToggleDayOfWeekClosed = async (dayOfWeek: number, currentClosed: boolean) => {
+    try {
+      const { error } = await supabase.from('cuex_opening_hours').update({
+        is_closed: !currentClosed
+      }).eq('day_of_week', dayOfWeek);
+      if (error) throw error;
+      showFeedback('success', 'Schedule updated.');
+      loadData();
+    } catch (err: any) {
+      showFeedback('error', err.message);
+    }
+  };
+
+  // ─── Day-wise Collections Calculation ─────────────────────────────────────
+  const dayWiseCollections = React.useMemo(() => {
+    const map = new Map<string, {
+      dateStr: string;
+      formattedDate: string;
+      isToday: boolean;
+      totalRevenue: number;
+      totalBookings: number;
+      poolRevenue: number;
+      poolCount: number;
+      snookerRevenue: number;
+      snookerCount: number;
+      ps5Revenue: number;
+      ps5Count: number;
+      confirmedCount: number;
+      completedCount: number;
+      cancelledCount: number;
+      bookings: CuexBooking[];
+    }>();
+
+    const todayIST = getISTDateString();
+    const yesterdayDate = new Date();
+    yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+    const yesterdayIST = getISTDateString(yesterdayDate);
+
+    let rangeFilterFn = (_d: string) => true;
+    if (collectionRange === 'today') {
+      rangeFilterFn = (d) => d === todayIST;
+    } else if (collectionRange === 'yesterday') {
+      rangeFilterFn = (d) => d === yesterdayIST;
+    } else if (collectionRange === '7days') {
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+      const minDate = getISTDateString(sevenDaysAgo);
+      rangeFilterFn = (d) => d >= minDate && d <= todayIST;
+    } else if (collectionRange === 'month') {
+      const currentMonthPrefix = todayIST.slice(0, 7);
+      rangeFilterFn = (d) => d.startsWith(currentMonthPrefix);
+    } else if (collectionRange === 'custom') {
+      rangeFilterFn = (d) => {
+        if (collectionStartDate && d < collectionStartDate) return false;
+        if (collectionEndDate && d > collectionEndDate) return false;
+        return true;
+      };
+    }
+
+    bookings.forEach((b) => {
+      const d = getISTDateString(new Date(b.start_at));
+      if (!rangeFilterFn(d)) return;
+
+      if (!map.has(d)) {
+        map.set(d, {
+          dateStr: d,
+          formattedDate: formatDateIST(b.start_at),
+          isToday: d === todayIST,
+          totalRevenue: 0,
+          totalBookings: 0,
+          poolRevenue: 0,
+          poolCount: 0,
+          snookerRevenue: 0,
+          snookerCount: 0,
+          ps5Revenue: 0,
+          ps5Count: 0,
+          confirmedCount: 0,
+          completedCount: 0,
+          cancelledCount: 0,
+          bookings: [],
+        });
+      }
+
+      const item = map.get(d)!;
+      item.totalBookings += 1;
+      item.bookings.push(b);
+
+      const amt = Number(b.total_amount) || 0;
+      const isCountable = b.status === 'confirmed' || b.status === 'completed';
+
+      if (isCountable) {
+        item.totalRevenue += amt;
+        if (b.resource_id === 'pool') {
+          item.poolRevenue += amt;
+          item.poolCount += 1;
+        } else if (b.resource_id === 'snooker') {
+          item.snookerRevenue += amt;
+          item.snookerCount += 1;
+        } else if (b.resource_id === 'ps5') {
+          item.ps5Revenue += amt;
+          item.ps5Count += 1;
+        }
+      }
+
+      if (b.status === 'confirmed') item.confirmedCount += 1;
+      else if (b.status === 'completed') item.completedCount += 1;
+      else if (b.status === 'cancelled' || b.status === 'no_show') item.cancelledCount += 1;
+    });
+
+    const list = Array.from(map.values()).sort((a, b) => b.dateStr.localeCompare(a.dateStr));
+    const totalGross = list.reduce((s, d) => s + d.totalRevenue, 0);
+    const totalCount = list.reduce((s, d) => s + d.totalBookings, 0);
+    const avgDaily = list.length > 0 ? Math.round(totalGross / list.length) : 0;
+    
+    const totalPool = list.reduce((s, d) => s + d.poolRevenue, 0);
+    const totalSnooker = list.reduce((s, d) => s + d.snookerRevenue, 0);
+    const totalPs5 = list.reduce((s, d) => s + d.ps5Revenue, 0);
+    let topGame = 'Snooker Table';
+    if (totalPool >= totalSnooker && totalPool >= totalPs5) topGame = 'Pool Table';
+    else if (totalPs5 >= totalSnooker && totalPs5 >= totalPool) topGame = 'PS5 Gaming';
+
+    return { list, totalGross, totalCount, avgDaily, topGame, totalPool, totalSnooker, totalPs5 };
+  }, [bookings, collectionRange, collectionStartDate, collectionEndDate]);
+
+  // ─── Export Day-wise CSV ──────────────────────────────────────────────────
+  const handleExportDayWiseCSV = () => {
+    if (dayWiseCollections.list.length === 0) return;
+    const headers = ['Date', 'Total Gross (INR)', 'Total Bookings', 'Pool Revenue', 'Pool Count', 'Snooker Revenue', 'Snooker Count', 'PS5 Revenue', 'PS5 Count'].map(h => `"${h}"`).join(',');
+    const rows = dayWiseCollections.list.map(d => [
+      `"${d.dateStr}"`, d.totalRevenue, d.totalBookings, d.poolRevenue, d.poolCount, d.snookerRevenue, d.snookerCount, d.ps5Revenue, d.ps5Count
+    ].join(','));
+    const blob = new Blob(['\uFEFF' + [headers, ...rows].join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url;
+    a.setAttribute('download', `cuex_daily_collection_${getISTDateString()}.csv`);
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   const handleExportCSV = () => {
@@ -508,10 +764,10 @@ export const AdminAppPage: React.FC = () => {
         <p className="text-[11px] uppercase tracking-widest text-mutedgrey mb-3 font-semibold">Quick Actions</p>
         <div className="grid grid-cols-2 gap-3">
           {[
-            { icon: <UserPlus className="w-5 h-5" />, label: 'Walk-in Booking', action: () => setTab('walkin'), accent: 'bg-champagne/15 border-champagne/30 text-champagne' },
-            { icon: <Ban className="w-5 h-5" />, label: 'Block Maintenance', action: () => setTab('block'), accent: 'bg-red-500/15 border-red-500/30 text-red-400' },
-            { icon: <Download className="w-5 h-5" />, label: 'Export CSV', action: handleExportCSV, accent: 'bg-white/5 border-white/10 text-mutedgrey' },
-            { icon: <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />, label: 'Refresh Data', action: loadData, accent: 'bg-white/5 border-white/10 text-mutedgrey' },
+            { icon: <UserPlus className="w-5 h-5" />, label: 'Walk-in Booking', action: () => { setTab('controls'); setControlsSubTab('walkin'); }, accent: 'bg-champagne/15 border-champagne/30 text-champagne' },
+            { icon: <Ban className="w-5 h-5" />, label: 'Block Maintenance', action: () => { setTab('controls'); setControlsSubTab('maintenance'); }, accent: 'bg-red-500/15 border-red-500/30 text-red-400' },
+            { icon: <DollarSign className="w-5 h-5" />, label: 'Daily Collection', action: () => setTab('collection'), accent: 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400' },
+            { icon: <Sliders className="w-5 h-5" />, label: 'Venue Rates', action: () => { setTab('controls'); setControlsSubTab('rates'); }, accent: 'bg-white/5 border-white/10 text-warmivory' },
           ].map(a => (
             <button key={a.label} onClick={a.action}
               className={`flex flex-col items-center gap-2.5 p-4 rounded-2xl border text-xs font-semibold uppercase tracking-wide ${a.accent} active:scale-95 transition-transform`}>
@@ -580,6 +836,12 @@ export const AdminAppPage: React.FC = () => {
             </button>
           ))}
         </div>
+        <div className="flex items-center justify-between gap-2 pt-1">
+          <span className="text-[11px] text-mutedgrey uppercase font-bold tracking-wider">{filteredBookings.length} booking(s)</span>
+          <button onClick={handleExportCSV} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 text-xs font-semibold text-warmivory hover:text-champagne">
+            <Download className="w-3.5 h-3.5 text-champagne" /> Export CSV
+          </button>
+        </div>
       </div>
 
       {/* Results */}
@@ -596,7 +858,7 @@ export const AdminAppPage: React.FC = () => {
   const WalkInTab = () => (
     <form onSubmit={handleManualBook} className="space-y-4">
       <div className="p-4 rounded-2xl bg-champagne/5 border border-champagne/20">
-        <p className="text-xs text-champagne font-semibold">Walk-in booking is instantly confirmed — no hold period.</p>
+        <p className="text-xs text-champagne font-semibold">Walk-in booking is instantly confirmed — zero collision guarantee.</p>
       </div>
 
       <div>
@@ -637,8 +899,8 @@ export const AdminAppPage: React.FC = () => {
         <div>
           <label className={labelCls}>Duration</label>
           <select value={manualDuration} onChange={e => setManualDuration(Number(e.target.value))} className={inputCls}>
-            <option value={30}>30 min</option>
-            <option value={60}>60 min</option>
+            <option value={30}>30 min (Single Game / Frame)</option>
+            <option value={60}>60 min (1 Hour)</option>
             <option value={90}>90 min</option>
             <option value={120}>2 hours</option>
             <option value={180}>3 hours</option>
@@ -656,7 +918,7 @@ export const AdminAppPage: React.FC = () => {
       </div>
 
       <div>
-        <label className={labelCls}>Amount (auto-calculated)</label>
+        <label className={labelCls}>Amount (auto-calculated from live rates)</label>
         <div className="flex items-center gap-2">
           <span className="text-xs text-mutedgrey">₹</span>
           <input type="number" value={manualAmount} onChange={e => setManualAmount(Number(e.target.value))} className={`${inputCls} flex-1`} />
@@ -665,7 +927,7 @@ export const AdminAppPage: React.FC = () => {
 
       <div>
         <label className={labelCls}>Notes (optional)</label>
-        <textarea value={manualNotes} onChange={e => setManualNotes(e.target.value)} rows={2} className={`${inputCls} resize-none`} />
+        <textarea value={manualNotes} onChange={e => setManualNotes(e.target.value)} rows={2} className={`${inputCls} resize-none`} placeholder="e.g. Counter cash payment" />
       </div>
 
       <button type="submit" disabled={savingManual}
@@ -679,7 +941,7 @@ export const AdminAppPage: React.FC = () => {
   const BlockTab = () => (
     <div className="space-y-5">
       <form onSubmit={handleCreateBlock} className="space-y-4 p-4 rounded-2xl bg-white/3 border border-white/8">
-        <p className="text-sm font-bold text-warmivory">Add Maintenance Block</p>
+        <p className="text-sm font-bold text-warmivory">Schedule Table / Club Maintenance</p>
 
         <div>
           <label className={labelCls}>Facility</label>
@@ -704,13 +966,13 @@ export const AdminAppPage: React.FC = () => {
 
         <div>
           <label className={labelCls}>Reason</label>
-          <input value={blockReason} onChange={e => setBlockReason(e.target.value)} className={inputCls} placeholder="e.g. Maintenance, Private event" required />
+          <input value={blockReason} onChange={e => setBlockReason(e.target.value)} className={inputCls} placeholder="e.g. Cloth re-felting, tournament, cue repair" required />
         </div>
 
         <button type="submit" disabled={savingBlock}
           className="w-full py-3.5 rounded-xl bg-red-500/20 border border-red-500/40 text-red-400 font-bold text-sm uppercase tracking-wider flex items-center justify-center gap-2 disabled:opacity-60">
           {savingBlock ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Ban className="w-4 h-4" />}
-          Add Block
+          Add Maintenance Block
         </button>
       </form>
 
@@ -736,6 +998,494 @@ export const AdminAppPage: React.FC = () => {
           </div>
         </div>
       )}
+    </div>
+  );
+
+  const CollectionTab = () => (
+    <div className="space-y-4">
+      {/* Header & Export */}
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <h2 className="text-sm font-bold text-warmivory uppercase tracking-wide flex items-center gap-1.5">
+            <DollarSign className="w-4 h-4 text-champagne" />
+            Day-Wise Collection
+          </h2>
+          <p className="text-[11px] text-mutedgrey">Daily revenue ledger & facility breakdown</p>
+        </div>
+        <button
+          onClick={handleExportDayWiseCSV}
+          disabled={dayWiseCollections.list.length === 0}
+          className="px-3 py-1.5 rounded-xl bg-champagne/15 border border-champagne/30 text-champagne text-[11px] font-bold uppercase tracking-wider flex items-center gap-1 disabled:opacity-40"
+        >
+          <Download className="w-3.5 h-3.5" />
+          CSV
+        </button>
+      </div>
+
+      {/* Date Range Chips */}
+      <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+        {[
+          { id: 'all', label: 'All Days' },
+          { id: 'today', label: 'Today' },
+          { id: 'yesterday', label: 'Yesterday' },
+          { id: '7days', label: 'Last 7 Days' },
+          { id: 'month', label: 'This Month' },
+          { id: 'custom', label: 'Custom' },
+        ].map(f => (
+          <button
+            key={f.id}
+            onClick={() => setCollectionRange(f.id as any)}
+            className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase whitespace-nowrap border transition-all ${
+              collectionRange === f.id
+                ? 'bg-champagne text-obsidian border-champagne shadow-sm'
+                : 'bg-white/5 text-mutedgrey border-white/10'
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Custom Range Picker */}
+      {collectionRange === 'custom' && (
+        <div className="p-3 rounded-2xl bg-white/4 border border-white/8 grid grid-cols-2 gap-2 text-xs">
+          <div>
+            <label className="block text-[10px] text-mutedgrey uppercase mb-1">From</label>
+            <input
+              type="date"
+              value={collectionStartDate}
+              onChange={e => setCollectionStartDate(e.target.value)}
+              className={inputCls}
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] text-mutedgrey uppercase mb-1">To</label>
+            <input
+              type="date"
+              value={collectionEndDate}
+              onChange={e => setCollectionEndDate(e.target.value)}
+              className={inputCls}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* 4 Summary Cards */}
+      <div className="grid grid-cols-2 gap-2.5">
+        <div className="p-3.5 rounded-2xl bg-white/4 border border-white/8 space-y-1">
+          <span className="text-[10px] uppercase tracking-wider text-mutedgrey">Period Gross</span>
+          <p className="font-display text-2xl text-champagne">{formatINR(dayWiseCollections.totalGross)}</p>
+          <p className="text-[9px] text-mutedgrey">Confirmed & completed</p>
+        </div>
+        <div className="p-3.5 rounded-2xl bg-white/4 border border-white/8 space-y-1">
+          <span className="text-[10px] uppercase tracking-wider text-mutedgrey">Daily Average</span>
+          <p className="font-display text-2xl text-warmivory">{formatINR(dayWiseCollections.avgDaily)}</p>
+          <p className="text-[9px] text-mutedgrey">Over {dayWiseCollections.list.length} day(s)</p>
+        </div>
+        <div className="p-3.5 rounded-2xl bg-white/4 border border-white/8 space-y-1">
+          <span className="text-[10px] uppercase tracking-wider text-mutedgrey">Total Sessions</span>
+          <p className="font-display text-2xl text-warmivory">{dayWiseCollections.totalCount}</p>
+          <p className="text-[9px] text-mutedgrey">In selected range</p>
+        </div>
+        <div className="p-3.5 rounded-2xl bg-white/4 border border-white/8 space-y-1">
+          <span className="text-[10px] uppercase tracking-wider text-mutedgrey">Top Facility</span>
+          <p className="font-display text-lg text-emerald-400 truncate">{dayWiseCollections.topGame}</p>
+          <p className="text-[9px] text-mutedgrey">Highest revenue</p>
+        </div>
+      </div>
+
+      {/* Facility Distribution Bar */}
+      <div className="p-3.5 rounded-2xl bg-white/4 border border-white/8 space-y-2">
+        <div className="flex items-center justify-between text-[11px]">
+          <span className="font-bold text-warmivory uppercase tracking-wider">Revenue Breakdown</span>
+          <span className="text-mutedgrey text-[10px]">{formatINR(dayWiseCollections.totalGross)}</span>
+        </div>
+        <div className="w-full h-2 rounded-full bg-obsidian overflow-hidden flex">
+          <div
+            style={{ width: `${dayWiseCollections.totalGross > 0 ? (dayWiseCollections.totalSnooker / dayWiseCollections.totalGross) * 100 : 33}%` }}
+            className="h-full bg-champagne"
+            title="Snooker"
+          />
+          <div
+            style={{ width: `${dayWiseCollections.totalGross > 0 ? (dayWiseCollections.totalPool / dayWiseCollections.totalGross) * 100 : 33}%` }}
+            className="h-full bg-emerald-500"
+            title="Pool"
+          />
+          <div
+            style={{ width: `${dayWiseCollections.totalGross > 0 ? (dayWiseCollections.totalPs5 / dayWiseCollections.totalGross) * 100 : 34}%` }}
+            className="h-full bg-blue-500"
+            title="PS5"
+          />
+        </div>
+        <div className="grid grid-cols-3 gap-1 pt-1 text-[10px]">
+          <div className="flex items-center gap-1.5">
+            <div className="w-2 h-2 rounded-full bg-champagne shrink-0" />
+            <span className="truncate text-mutedgrey">Snooker: <strong className="text-warmivory">{formatINR(dayWiseCollections.totalSnooker)}</strong></span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <div className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+            <span className="truncate text-mutedgrey">Pool: <strong className="text-warmivory">{formatINR(dayWiseCollections.totalPool)}</strong></span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <div className="w-2 h-2 rounded-full bg-blue-500 shrink-0" />
+            <span className="truncate text-mutedgrey">PS5: <strong className="text-warmivory">{formatINR(dayWiseCollections.totalPs5)}</strong></span>
+          </div>
+        </div>
+      </div>
+
+      {/* Day by Day List */}
+      <div className="space-y-2.5">
+        <p className="text-[11px] uppercase tracking-widest text-mutedgrey font-semibold">
+          Daily Ledger ({dayWiseCollections.list.length} Days)
+        </p>
+
+        {dayWiseCollections.list.length === 0 ? (
+          <div className="py-12 text-center text-mutedgrey text-xs rounded-2xl bg-white/3 border border-white/5">
+            No collection data recorded for this range.
+          </div>
+        ) : (
+          dayWiseCollections.list.map(d => {
+            const isExpanded = selectedDayDetail === d.dateStr;
+            return (
+              <div key={d.dateStr} className="rounded-2xl bg-white/4 border border-white/8 overflow-hidden transition-all">
+                <div
+                  onClick={() => setSelectedDayDetail(isExpanded ? null : d.dateStr)}
+                  className="p-3.5 flex items-center justify-between cursor-pointer select-none active:bg-white/5"
+                >
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-warmivory text-sm">{d.formattedDate}</span>
+                      {d.isToday && (
+                        <span className="px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-bold text-[9px] uppercase border border-emerald-500/30">
+                          Today
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-mutedgrey">
+                      {d.totalBookings} bookings • {d.confirmedCount + d.completedCount} successful
+                    </p>
+                  </div>
+                  <div className="text-right flex items-center gap-2">
+                    <div>
+                      <p className="font-display text-lg text-champagne">{formatINR(d.totalRevenue)}</p>
+                      <p className="text-[10px] text-mutedgrey font-mono">{d.dateStr}</p>
+                    </div>
+                    <ChevronRight className={`w-4 h-4 text-mutedgrey transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                  </div>
+                </div>
+
+                {/* Mini breakdown */}
+                <div className="px-3.5 pb-3 grid grid-cols-3 gap-1.5 pt-1 border-t border-white/5 text-[10px]">
+                  <div className="p-2 rounded-xl bg-black/30 border border-white/5">
+                    <span className="text-champagne font-bold uppercase block text-[9px]">Snooker</span>
+                    <span className="font-bold text-warmivory">{formatINR(d.snookerRevenue)}</span>
+                    <span className="text-mutedgrey block">{d.snookerCount} frame/hr</span>
+                  </div>
+                  <div className="p-2 rounded-xl bg-black/30 border border-white/5">
+                    <span className="text-emerald-400 font-bold uppercase block text-[9px]">Pool</span>
+                    <span className="font-bold text-warmivory">{formatINR(d.poolRevenue)}</span>
+                    <span className="text-mutedgrey block">{d.poolCount} game/hr</span>
+                  </div>
+                  <div className="p-2 rounded-xl bg-black/30 border border-white/5">
+                    <span className="text-blue-400 font-bold uppercase block text-[9px]">PS5</span>
+                    <span className="font-bold text-warmivory">{formatINR(d.ps5Revenue)}</span>
+                    <span className="text-mutedgrey block">{d.ps5Count} sess</span>
+                  </div>
+                </div>
+
+                {/* Expanded individual booking list */}
+                {isExpanded && (
+                  <div className="p-3 bg-black/40 border-t border-white/10 space-y-1.5">
+                    <p className="text-[10px] font-bold text-mutedgrey uppercase tracking-wider mb-1">
+                      Individual Bookings on {d.formattedDate}:
+                    </p>
+                    {d.bookings.map(b => (
+                      <div key={b.id} className="p-2.5 rounded-xl bg-white/4 border border-white/5 flex items-center justify-between text-xs">
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono text-champagne text-[11px] font-bold">{b.booking_reference}</span>
+                            <span className="font-semibold text-warmivory">{b.customer_name}</span>
+                            <span className="text-[10px] text-mutedgrey uppercase">({b.resource_id})</span>
+                          </div>
+                          <p className="text-[10px] text-mutedgrey">
+                            {formatToIST(b.start_at)} – {formatToIST(b.end_at)}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <span className="font-bold text-warmivory block">{formatINR(b.total_amount)}</span>
+                          <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded-full ${statusColour(b.status)}`}>
+                            {b.status}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+
+  const ControlsTab = () => (
+    <div className="space-y-4">
+      {/* Sub-tab selector */}
+      <div className="grid grid-cols-4 gap-1.5 p-1 rounded-2xl bg-white/5 border border-white/10">
+        {[
+          { id: 'rates', label: 'Rates' },
+          { id: 'dayoff', label: 'Day-Off' },
+          { id: 'walkin', label: 'Walk-in' },
+          { id: 'maintenance', label: 'Repair' },
+        ].map(s => (
+          <button
+            key={s.id}
+            type="button"
+            onClick={() => setControlsSubTab(s.id as any)}
+            className={`py-2 rounded-xl text-xs font-bold uppercase transition-all ${
+              controlsSubTab === s.id
+                ? 'bg-champagne text-obsidian shadow-sm'
+                : 'text-mutedgrey hover:text-warmivory'
+            }`}
+          >
+            {s.label}
+          </button>
+        ))}
+      </div>
+
+      {/* SUB-TAB 1: LIVE PRICING EDITOR */}
+      {controlsSubTab === 'rates' && (
+        <form onSubmit={handleSavePrices} className="space-y-4">
+          <div className="p-3.5 rounded-2xl bg-champagne/5 border border-champagne/20 flex items-center justify-between">
+            <div>
+              <p className="text-xs font-bold text-champagne">Live Pricing Editor</p>
+              <p className="text-[10px] text-mutedgrey">Updates website & mobile app prices</p>
+            </div>
+            <button
+              type="submit"
+              disabled={savingPrices}
+              className="px-3.5 py-2 rounded-xl bg-champagne text-obsidian text-xs font-bold uppercase shadow-gold-glow disabled:opacity-50 flex items-center gap-1.5"
+            >
+              {savingPrices ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+              {savingPrices ? 'Saving' : 'Save'}
+            </button>
+          </div>
+
+          {/* Pool Table Rates */}
+          <div className="p-4 rounded-2xl bg-white/4 border border-emerald-500/30 space-y-3">
+            <div className="flex items-center gap-2 text-emerald-400">
+              <CircleDot className="w-4 h-4" />
+              <h4 className="font-bold text-sm uppercase">Pool Table</h4>
+            </div>
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div>
+                <label className="block text-mutedgrey text-[10px] uppercase mb-1">Per Game (₹)</label>
+                <input
+                  type="number"
+                  value={pricePoolMatch}
+                  onChange={e => setPricePoolMatch(Number(e.target.value))}
+                  className={inputCls}
+                  required
+                />
+                <span className="text-[9px] text-mutedgrey mt-0.5 block">Configured: ₹40</span>
+              </div>
+              <div>
+                <label className="block text-mutedgrey text-[10px] uppercase mb-1">Hourly Rate (₹)</label>
+                <input
+                  type="number"
+                  value={pricePoolHourly}
+                  onChange={e => setPricePoolHourly(Number(e.target.value))}
+                  className={inputCls}
+                  required
+                />
+                <span className="text-[9px] text-mutedgrey mt-0.5 block">Configured: ₹120</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Snooker Table Rates */}
+          <div className="p-4 rounded-2xl bg-white/4 border border-champagne/30 space-y-3">
+            <div className="flex items-center gap-2 text-champagne">
+              <Trophy className="w-4 h-4" />
+              <h4 className="font-bold text-sm uppercase">Snooker Table</h4>
+            </div>
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div>
+                <label className="block text-mutedgrey text-[10px] uppercase mb-1">Per Frame (₹)</label>
+                <input
+                  type="number"
+                  value={priceSnookerMatch}
+                  onChange={e => setPriceSnookerMatch(Number(e.target.value))}
+                  className={inputCls}
+                  required
+                />
+                <span className="text-[9px] text-mutedgrey mt-0.5 block">Configured: ₹120</span>
+              </div>
+              <div>
+                <label className="block text-mutedgrey text-[10px] uppercase mb-1">Hourly Rate (₹)</label>
+                <input
+                  type="number"
+                  value={priceSnookerHourly}
+                  onChange={e => setPriceSnookerHourly(Number(e.target.value))}
+                  className={inputCls}
+                  required
+                />
+                <span className="text-[9px] text-mutedgrey mt-0.5 block">Configured: ₹360</span>
+              </div>
+            </div>
+          </div>
+
+          {/* PS5 Station Rates */}
+          <div className="p-4 rounded-2xl bg-white/4 border border-blue-500/30 space-y-3">
+            <div className="flex items-center gap-2 text-blue-400">
+              <Gamepad2 className="w-4 h-4" />
+              <h4 className="font-bold text-sm uppercase">PS5 Station</h4>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div>
+                <label className="block text-mutedgrey text-[10px] uppercase mb-1">1 Player 1 Hr (₹)</label>
+                <input
+                  type="number"
+                  value={pricePs5Single1}
+                  onChange={e => setPricePs5Single1(Number(e.target.value))}
+                  className={inputCls}
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-mutedgrey text-[10px] uppercase mb-1">1 Player 2 Hrs (₹)</label>
+                <input
+                  type="number"
+                  value={pricePs5Single2}
+                  onChange={e => setPricePs5Single2(Number(e.target.value))}
+                  className={inputCls}
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-mutedgrey text-[10px] uppercase mb-1">2 Players 1 Hr (₹)</label>
+                <input
+                  type="number"
+                  value={pricePs5Two1}
+                  onChange={e => setPricePs5Two1(Number(e.target.value))}
+                  className={inputCls}
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-mutedgrey text-[10px] uppercase mb-1">2 Players 2 Hrs (₹)</label>
+                <input
+                  type="number"
+                  value={pricePs5Two2}
+                  onChange={e => setPricePs5Two2(Number(e.target.value))}
+                  className={inputCls}
+                  required
+                />
+              </div>
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={savingPrices}
+            className="w-full py-4 rounded-2xl bg-gradient-to-r from-champagne to-warmgold text-obsidian font-bold text-sm uppercase tracking-widest flex items-center justify-center gap-2 shadow-gold-glow disabled:opacity-60"
+          >
+            {savingPrices ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+            {savingPrices ? 'Saving Changes…' : 'Save Pricing Changes'}
+          </button>
+        </form>
+      )}
+
+      {/* SUB-TAB 2: DAY-OFF & EMERGENCY CLOSURE */}
+      {controlsSubTab === 'dayoff' && (
+        <div className="space-y-4">
+          {/* Specific Date Closure */}
+          <form onSubmit={handleMarkDateClosed} className="p-4 rounded-2xl bg-white/4 border border-white/8 space-y-3">
+            <div>
+              <p className="text-xs font-bold text-warmivory">Mark Date Closed (Holiday / Off)</p>
+              <p className="text-[10px] text-mutedgrey">Blocks online reservations for that entire day</p>
+            </div>
+            <div>
+              <label className={labelCls}>Select Date</label>
+              <input
+                type="date"
+                value={holidayDate}
+                onChange={e => setHolidayDate(e.target.value)}
+                min={getISTDateString()}
+                className={inputCls}
+                required
+              />
+            </div>
+            <div>
+              <label className={labelCls}>Reason / Occasion</label>
+              <input
+                type="text"
+                value={holidayReason}
+                onChange={e => setHolidayReason(e.target.value)}
+                placeholder="e.g. Festival Holiday, Maintenance, Private Party"
+                className={inputCls}
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={savingHoliday}
+              className="w-full py-3.5 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 disabled:opacity-50"
+            >
+              {savingHoliday ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Ban className="w-3.5 h-3.5" />}
+              {savingHoliday ? 'Saving…' : 'Mark Club Closed on This Date'}
+            </button>
+          </form>
+
+          {/* Weekly Recurring Closed Days */}
+          <div className="p-4 rounded-2xl bg-white/4 border border-white/8 space-y-3">
+            <div>
+              <p className="text-xs font-bold text-warmivory">Weekly Day-Off Schedule</p>
+              <p className="text-[10px] text-mutedgrey">Toggle regular weekly club closed days</p>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { day: 1, name: 'Monday' },
+                { day: 2, name: 'Tuesday' },
+                { day: 3, name: 'Wednesday' },
+                { day: 4, name: 'Thursday' },
+                { day: 5, name: 'Friday' },
+                { day: 6, name: 'Saturday' },
+                { day: 0, name: 'Sunday' },
+              ].map(d => {
+                const daySchedule = openingHours.find(h => h.day_of_week === d.day);
+                const isClosed = daySchedule?.is_closed ?? false;
+                return (
+                  <button
+                    key={d.day}
+                    type="button"
+                    onClick={() => handleToggleDayOfWeekClosed(d.day, isClosed)}
+                    className={`p-3 rounded-xl border text-left flex items-center justify-between transition-all ${
+                      isClosed
+                        ? 'bg-red-500/15 border-red-500/30 text-red-400'
+                        : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300'
+                    }`}
+                  >
+                    <div>
+                      <span className="font-bold text-xs block">{d.name}</span>
+                      <span className="text-[9px] opacity-80">{isClosed ? 'Closed All Day' : 'Open (8 AM–3 AM)'}</span>
+                    </div>
+                    <span className="text-[10px] font-extrabold uppercase px-1.5 py-0.5 rounded border border-current">
+                      {isClosed ? 'OFF' : 'OPEN'}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SUB-TAB 3: WALK-IN BOOKING */}
+      {controlsSubTab === 'walkin' && <WalkInTab />}
+
+      {/* SUB-TAB 4: MAINTENANCE BLOCK */}
+      {controlsSubTab === 'maintenance' && <BlockTab />}
     </div>
   );
 
@@ -825,14 +1575,18 @@ export const AdminAppPage: React.FC = () => {
     { id: 'home', label: 'Home', icon: <Home className="w-5 h-5" /> },
     { id: 'pending', label: 'Requests', icon: <BellRing className="w-5 h-5" />, badge: pending.length },
     { id: 'bookings', label: 'Bookings', icon: <Calendar className="w-5 h-5" /> },
-    { id: 'walkin', label: 'Walk-in', icon: <UserPlus className="w-5 h-5" /> },
-    { id: 'block', label: 'Block', icon: <Wrench className="w-5 h-5" /> },
+    { id: 'collection', label: 'Collection', icon: <DollarSign className="w-5 h-5" /> },
+    { id: 'controls', label: 'Controls', icon: <Sliders className="w-5 h-5" /> },
     { id: 'settings', label: 'Settings', icon: <Settings className="w-5 h-5" /> },
   ];
 
   const tabTitle: Record<AdminTab, string> = {
-    home: 'Dashboard', pending: 'Booking Requests', bookings: 'All Bookings',
-    walkin: 'Walk-in Booking', block: 'Maintenance Block', settings: 'Settings',
+    home: 'Dashboard',
+    pending: 'Booking Requests',
+    bookings: 'All Bookings',
+    collection: 'Day-Wise Collection',
+    controls: 'Venue Controls',
+    settings: 'Settings',
   };
 
   return (
@@ -950,8 +1704,8 @@ export const AdminAppPage: React.FC = () => {
         {tab === 'home' && <HomeTab />}
         {tab === 'pending' && <PendingTab />}
         {tab === 'bookings' && <BookingsTab />}
-        {tab === 'walkin' && <WalkInTab />}
-        {tab === 'block' && <BlockTab />}
+        {tab === 'collection' && <CollectionTab />}
+        {tab === 'controls' && <ControlsTab />}
         {tab === 'settings' && <SettingsTab />}
       </main>
 

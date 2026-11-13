@@ -11,8 +11,12 @@ export interface CuexResource {
   pricing_details: {
     single_player?: Record<string, number>;
     two_player?: Record<string, number>;
-    hourly?: Record<string, number>;
+    hourly?: Record<string, number> | number;
     per_match?: Record<string, number>;
+    match?: number;
+    per_game?: number;
+    frame?: number;
+    [key: string]: any;
   };
   buffer_minutes: number;
   max_advance_days: number;

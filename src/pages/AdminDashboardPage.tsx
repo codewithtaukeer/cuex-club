@@ -23,6 +23,11 @@ import {
   VolumeX,
   BellRing,
   Smartphone,
+  CircleDot,
+  Gamepad2,
+  Trophy,
+  Sliders,
+  Check,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
@@ -36,17 +41,53 @@ import {
   showBrowserNotification 
 } from '../lib/notificationSound';
 
+function statusColour(status: string): string {
+  switch (status) {
+    case 'confirmed': return 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30';
+    case 'pending_confirmation':
+    case 'pending': return 'bg-amber-500/20 text-amber-400 border-amber-500/30';
+    case 'completed': return 'bg-blue-500/20 text-blue-400 border-blue-500/30';
+    case 'cancelled': return 'bg-zinc-500/20 text-zinc-400 border-zinc-500/30';
+    case 'expired': return 'bg-orange-500/20 text-orange-400 border-orange-500/30';
+    case 'no_show':
+    case 'rejected': return 'bg-red-500/20 text-red-400 border-red-500/30';
+    default: return 'bg-white/10 text-white/60 border-white/10';
+  }
+}
+
 export const AdminDashboardPage: React.FC = () => {
   const { user, isAdmin, loading: authLoading } = useAuth();
   const navigate = useNavigate();
 
-  const [activeTab, setActiveTab] = useState<'bookings' | 'resources' | 'blocked' | 'settings'>('bookings');
+  const [activeTab, setActiveTab] = useState<'bookings' | 'collection' | 'controls' | 'resources' | 'blocked' | 'settings'>('bookings');
   const [bookings, setBookings] = useState<CuexBooking[]>([]);
   const [resources, setResources] = useState<CuexResource[]>([]);
   const [blockedPeriods, setBlockedPeriods] = useState<CuexBlockedPeriod[]>([]);
   const [openingHours, setOpeningHours] = useState<CuexOpeningHour[]>([]);
   const [venueSettings, setVenueSettings] = useState<CuexVenueSettings | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // Live Price Management state
+  const [pricePoolMatch, setPricePoolMatch] = useState<number>(40);
+  const [pricePoolHourly, setPricePoolHourly] = useState<number>(120);
+  const [priceSnookerMatch, setPriceSnookerMatch] = useState<number>(120);
+  const [priceSnookerHourly, setPriceSnookerHourly] = useState<number>(360);
+  const [pricePs5Single1, setPricePs5Single1] = useState<number>(149);
+  const [pricePs5Single2, setPricePs5Single2] = useState<number>(249);
+  const [pricePs5Two1, setPricePs5Two1] = useState<number>(249);
+  const [pricePs5Two2, setPricePs5Two2] = useState<number>(349);
+  const [savingPrices, setSavingPrices] = useState(false);
+
+  // Day-off / Blackout Date state
+  const [holidayDate, setHolidayDate] = useState<string>(getISTDateString());
+  const [holidayReason, setHolidayReason] = useState<string>('Club Holiday / Full-Day Closure');
+  const [savingHoliday, setSavingHoliday] = useState(false);
+
+  // Day-wise Collection Filter state
+  const [collectionRange, setCollectionRange] = useState<'all' | 'today' | 'yesterday' | '7days' | 'month' | 'custom'>('all');
+  const [collectionStartDate, setCollectionStartDate] = useState<string>('');
+  const [collectionEndDate, setCollectionEndDate] = useState<string>('');
+  const [selectedDayDetail, setSelectedDayDetail] = useState<string | null>(null);
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -198,6 +239,243 @@ export const AdminDashboardPage: React.FC = () => {
       supabase.removeChannel(channel);
     };
   }, [isAdmin, soundEnabled]);
+
+  // Sync pricing state with loaded resources
+  useEffect(() => {
+    if (resources.length > 0) {
+      const p = resources.find(r => r.id === 'pool');
+      if (p) {
+        setPricePoolHourly(Number(p.hourly_rate) || 120);
+        setPricePoolMatch(Number(p.pricing_details?.match ?? p.pricing_details?.per_game ?? 40));
+      }
+      const s = resources.find(r => r.id === 'snooker');
+      if (s) {
+        setPriceSnookerHourly(Number(s.hourly_rate) || 360);
+        setPriceSnookerMatch(Number(s.pricing_details?.match ?? s.pricing_details?.frame ?? 120));
+      }
+      const ps = resources.find(r => r.id === 'ps5');
+      if (ps) {
+        setPricePs5Single1(Number(ps.pricing_details?.single_player?.['60'] ?? 149));
+        setPricePs5Single2(Number(ps.pricing_details?.single_player?.['120'] ?? 249));
+        setPricePs5Two1(Number(ps.pricing_details?.two_player?.['60'] ?? 249));
+        setPricePs5Two2(Number(ps.pricing_details?.two_player?.['120'] ?? 349));
+      }
+    }
+  }, [resources]);
+
+  // Save Pricing Changes across the entire club
+  const handleSavePrices = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingPrices(true);
+    try {
+      // 1. Update Pool
+      const { error: errP } = await supabase.from('cuex_resources').update({
+        hourly_rate: pricePoolHourly,
+        pricing_details: { match: pricePoolMatch, per_game: pricePoolMatch, hourly: pricePoolHourly }
+      }).eq('id', 'pool');
+      if (errP) throw errP;
+
+      // 2. Update Snooker
+      const { error: errS } = await supabase.from('cuex_resources').update({
+        hourly_rate: priceSnookerHourly,
+        pricing_details: { match: priceSnookerMatch, frame: priceSnookerMatch, hourly: priceSnookerHourly }
+      }).eq('id', 'snooker');
+      if (errS) throw errS;
+
+      // 3. Update PS5
+      const { error: errPs } = await supabase.from('cuex_resources').update({
+        hourly_rate: pricePs5Single1,
+        pricing_details: {
+          single_player: { '60': pricePs5Single1, '120': pricePs5Single2 },
+          two_player: { '60': pricePs5Two1, '120': pricePs5Two2 }
+        }
+      }).eq('id', 'ps5');
+      if (errPs) throw errPs;
+
+      setFeedbackMsg({ type: 'success', text: 'Pricing rates updated successfully across the website & app!' });
+      loadAllAdminData();
+    } catch (err: any) {
+      setFeedbackMsg({ type: 'error', text: err.message || 'Failed to update pricing.' });
+    } finally {
+      setSavingPrices(false);
+    }
+  };
+
+  // Mark full day closed / holiday
+  const handleMarkDateClosed = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!holidayDate) return;
+    setSavingHoliday(true);
+    try {
+      const startAt = `${holidayDate}T00:00:00+05:30`;
+      const endAt = `${holidayDate}T23:59:59+05:30`;
+      const { error } = await supabase.from('cuex_blocked_periods').insert({
+        resource_id: null, // Full venue closure
+        start_at: new Date(startAt).toISOString(),
+        end_at: new Date(endAt).toISOString(),
+        reason: holidayReason.trim() || 'Club Full-Day Closure',
+        created_by: user?.id,
+      });
+      if (error) throw error;
+      setFeedbackMsg({ type: 'success', text: `Venue marked closed for ${formatDateIST(startAt)}.` });
+      loadAllAdminData();
+    } catch (err: any) {
+      setFeedbackMsg({ type: 'error', text: err.message || 'Failed to mark date closed.' });
+    } finally {
+      setSavingHoliday(false);
+    }
+  };
+
+  // Toggle weekly day-of-week open/closed
+  const handleToggleDayOfWeekClosed = async (dayOfWeek: number, currentClosed: boolean) => {
+    try {
+      const { error } = await supabase.from('cuex_opening_hours').update({
+        is_closed: !currentClosed
+      }).eq('day_of_week', dayOfWeek);
+      if (error) throw error;
+      setFeedbackMsg({ type: 'success', text: `Weekly operating schedule updated.` });
+      loadAllAdminData();
+    } catch (err: any) {
+      setFeedbackMsg({ type: 'error', text: err.message });
+    }
+  };
+
+  // Compute Day-wise Collections
+  const dayWiseCollections = React.useMemo(() => {
+    const map = new Map<string, {
+      dateStr: string;
+      formattedDate: string;
+      isToday: boolean;
+      totalRevenue: number;
+      totalBookings: number;
+      poolRevenue: number;
+      poolCount: number;
+      snookerRevenue: number;
+      snookerCount: number;
+      ps5Revenue: number;
+      ps5Count: number;
+      confirmedCount: number;
+      completedCount: number;
+      cancelledCount: number;
+      bookings: CuexBooking[];
+    }>();
+
+    const todayIST = getISTDateString();
+    const yesterdayDate = new Date();
+    yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+    const yesterdayIST = getISTDateString(yesterdayDate);
+
+    let rangeFilterFn = (_d: string) => true;
+    if (collectionRange === 'today') {
+      rangeFilterFn = (d) => d === todayIST;
+    } else if (collectionRange === 'yesterday') {
+      rangeFilterFn = (d) => d === yesterdayIST;
+    } else if (collectionRange === '7days') {
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+      const minDate = getISTDateString(sevenDaysAgo);
+      rangeFilterFn = (d) => d >= minDate && d <= todayIST;
+    } else if (collectionRange === 'month') {
+      const currentMonthPrefix = todayIST.slice(0, 7);
+      rangeFilterFn = (d) => d.startsWith(currentMonthPrefix);
+    } else if (collectionRange === 'custom') {
+      rangeFilterFn = (d) => {
+        if (collectionStartDate && d < collectionStartDate) return false;
+        if (collectionEndDate && d > collectionEndDate) return false;
+        return true;
+      };
+    }
+
+    bookings.forEach((b) => {
+      const d = getISTDateString(new Date(b.start_at));
+      if (!rangeFilterFn(d)) return;
+
+      if (!map.has(d)) {
+        map.set(d, {
+          dateStr: d,
+          formattedDate: formatDateIST(b.start_at),
+          isToday: d === todayIST,
+          totalRevenue: 0,
+          totalBookings: 0,
+          poolRevenue: 0,
+          poolCount: 0,
+          snookerRevenue: 0,
+          snookerCount: 0,
+          ps5Revenue: 0,
+          ps5Count: 0,
+          confirmedCount: 0,
+          completedCount: 0,
+          cancelledCount: 0,
+          bookings: [],
+        });
+      }
+
+      const item = map.get(d)!;
+      item.totalBookings += 1;
+      item.bookings.push(b);
+
+      const amt = Number(b.total_amount) || 0;
+      const isCountable = b.status === 'confirmed' || b.status === 'completed';
+
+      if (isCountable) {
+        item.totalRevenue += amt;
+        if (b.resource_id === 'pool') {
+          item.poolRevenue += amt;
+          item.poolCount += 1;
+        } else if (b.resource_id === 'snooker') {
+          item.snookerRevenue += amt;
+          item.snookerCount += 1;
+        } else if (b.resource_id === 'ps5') {
+          item.ps5Revenue += amt;
+          item.ps5Count += 1;
+        }
+      }
+
+      if (b.status === 'confirmed') item.confirmedCount += 1;
+      else if (b.status === 'completed') item.completedCount += 1;
+      else if (b.status === 'cancelled' || b.status === 'no_show') item.cancelledCount += 1;
+    });
+
+    const list = Array.from(map.values()).sort((a, b) => b.dateStr.localeCompare(a.dateStr));
+    const totalGross = list.reduce((s, d) => s + d.totalRevenue, 0);
+    const totalCount = list.reduce((s, d) => s + d.totalBookings, 0);
+    const avgDaily = list.length > 0 ? Math.round(totalGross / list.length) : 0;
+    
+    const totalPool = list.reduce((s, d) => s + d.poolRevenue, 0);
+    const totalSnooker = list.reduce((s, d) => s + d.snookerRevenue, 0);
+    const totalPs5 = list.reduce((s, d) => s + d.ps5Revenue, 0);
+    let topGame = 'Snooker Table';
+    if (totalPool >= totalSnooker && totalPool >= totalPs5) topGame = 'Pool Table';
+    else if (totalPs5 >= totalSnooker && totalPs5 >= totalPool) topGame = 'PS5 Gaming';
+
+    return { list, totalGross, totalCount, avgDaily, topGame, totalPool, totalSnooker, totalPs5 };
+  }, [bookings, collectionRange, collectionStartDate, collectionEndDate]);
+
+  // Export Day-wise CSV
+  const handleExportDayWiseCSV = () => {
+    if (dayWiseCollections.list.length === 0) return;
+    const headers = ['Date', 'Total Gross (INR)', 'Total Bookings', 'Pool Revenue (INR)', 'Pool Bookings', 'Snooker Revenue (INR)', 'Snooker Bookings', 'PS5 Revenue (INR)', 'PS5 Bookings', 'Confirmed', 'Completed', 'Cancelled'].map(h => `"${h}"`).join(',');
+    const rows = dayWiseCollections.list.map(d => [
+      `"${d.dateStr}"`,
+      d.totalRevenue,
+      d.totalBookings,
+      d.poolRevenue,
+      d.poolCount,
+      d.snookerRevenue,
+      d.snookerCount,
+      d.ps5Revenue,
+      d.ps5Count,
+      d.confirmedCount,
+      d.completedCount,
+      d.cancelledCount,
+    ].join(','));
+    const blob = new Blob(['\uFEFF' + [headers, ...rows].join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url;
+    a.setAttribute('download', `cuex_daywise_collection_${getISTDateString()}.csv`);
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
 
   // Admin Confirm Booking Request
   const handleConfirmBookingRequest = async (b: CuexBooking) => {
@@ -379,8 +657,11 @@ export const AdminDashboardPage: React.FC = () => {
       } else {
         setManualAmount(manualDuration >= 120 ? 249 : 149);
       }
+    } else if (manualResource === 'snooker') {
+      setManualAmount(manualDuration <= 30 ? 120 : manualDuration >= 120 ? 720 : 360);
     } else {
-      setManualAmount(manualDuration <= 30 ? 60 : manualDuration >= 120 ? 240 : 120);
+      // Pool
+      setManualAmount(manualDuration <= 30 ? 40 : manualDuration >= 120 ? 240 : 120);
     }
   }, [manualResource, manualDuration, manualPlayers]);
 
@@ -891,6 +1172,8 @@ export const AdminDashboardPage: React.FC = () => {
         <div className="flex items-center gap-2 border-b border-white/10 pb-3 mb-6 overflow-x-auto scrollbar-none">
           {[
             { id: 'bookings', label: 'All Bookings', count: bookings.length },
+            { id: 'collection', label: 'Day-wise Collection 💰' },
+            { id: 'controls', label: 'Venue Controls ⚙️' },
             { id: 'resources', label: 'Facilities & Rates', count: resources.length },
             { id: 'blocked', label: 'Maintenance Blocks', count: blockedPeriods.length },
             { id: 'settings', label: 'Venue & Anti-Abuse Settings' },
@@ -1115,6 +1398,565 @@ export const AdminDashboardPage: React.FC = () => {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {/* TAB: DAY-WISE COLLECTION & FINANCIAL REPORTING */}
+        {activeTab === 'collection' && (
+          <div className="space-y-8 animate-in fade-in duration-200">
+            {/* Header + Actions */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h2 className="font-display text-2xl text-warmivory uppercase tracking-wide flex items-center gap-2">
+                  <DollarSign className="w-6 h-6 text-champagne" />
+                  Day-Wise Financial Collection
+                </h2>
+                <p className="text-xs text-mutedgrey mt-1">
+                  Track daily cashflow, revenue breakdown by facility, and booking performance.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleExportDayWiseCSV}
+                  disabled={dayWiseCollections.list.length === 0}
+                  className="px-4 py-2.5 rounded-xl bg-charcoal border border-champagne/40 hover:border-champagne text-champagne text-xs font-bold uppercase tracking-wider flex items-center gap-2 shadow-sm transition-all disabled:opacity-50"
+                >
+                  <Download className="w-4 h-4" />
+                  Export Daily CSV
+                </button>
+              </div>
+            </div>
+
+            {/* Range Filters */}
+            <div className="p-4 rounded-2xl bg-charcoal/80 border border-white/5 space-y-4">
+              <div className="flex flex-wrap items-center gap-2">
+                {[
+                  { id: 'all', label: 'All Days' },
+                  { id: 'today', label: 'Today' },
+                  { id: 'yesterday', label: 'Yesterday' },
+                  { id: '7days', label: 'Last 7 Days' },
+                  { id: 'month', label: 'This Month' },
+                  { id: 'custom', label: 'Custom Range' },
+                ].map((f) => (
+                  <button
+                    key={f.id}
+                    onClick={() => setCollectionRange(f.id as any)}
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all ${
+                      collectionRange === f.id
+                        ? 'bg-champagne text-obsidian shadow-gold-glow'
+                        : 'bg-obsidian border border-white/10 text-mutedgrey hover:text-warmivory'
+                    }`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+
+              {collectionRange === 'custom' && (
+                <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-white/5 text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="text-mutedgrey">From:</span>
+                    <input
+                      type="date"
+                      value={collectionStartDate}
+                      onChange={(e) => setCollectionStartDate(e.target.value)}
+                      className="px-3 py-1.5 rounded-lg bg-obsidian border border-white/10 text-warmivory outline-none focus:border-champagne"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-mutedgrey">To:</span>
+                    <input
+                      type="date"
+                      value={collectionEndDate}
+                      onChange={(e) => setCollectionEndDate(e.target.value)}
+                      className="px-3 py-1.5 rounded-lg bg-obsidian border border-white/10 text-warmivory outline-none focus:border-champagne"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* 4 Financial Highlight Cards */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="p-5 rounded-2xl bg-charcoal/80 border border-white/5 space-y-1">
+                <span className="text-[11px] uppercase tracking-wider text-mutedgrey">Total Period Revenue</span>
+                <p className="font-display text-3xl sm:text-4xl text-champagne">
+                  {formatINR(dayWiseCollections.totalGross)}
+                </p>
+                <p className="text-[10px] text-mutedgrey">From confirmed & completed sessions</p>
+              </div>
+
+              <div className="p-5 rounded-2xl bg-charcoal/80 border border-white/5 space-y-1">
+                <span className="text-[11px] uppercase tracking-wider text-mutedgrey">Daily Average</span>
+                <p className="font-display text-3xl sm:text-4xl text-warmivory">
+                  {formatINR(dayWiseCollections.avgDaily)}
+                </p>
+                <p className="text-[10px] text-mutedgrey">Across {dayWiseCollections.list.length} recorded day(s)</p>
+              </div>
+
+              <div className="p-5 rounded-2xl bg-charcoal/80 border border-white/5 space-y-1">
+                <span className="text-[11px] uppercase tracking-wider text-mutedgrey">Total Bookings</span>
+                <p className="font-display text-3xl sm:text-4xl text-warmivory">
+                  {dayWiseCollections.totalCount}
+                </p>
+                <p className="text-[10px] text-mutedgrey">All statuses in selected range</p>
+              </div>
+
+              <div className="p-5 rounded-2xl bg-charcoal/80 border border-white/5 space-y-1">
+                <span className="text-[11px] uppercase tracking-wider text-mutedgrey">Top Grossing Facility</span>
+                <p className="font-display text-2xl sm:text-3xl text-cuexemerald truncate">
+                  {dayWiseCollections.topGame}
+                </p>
+                <p className="text-[10px] text-mutedgrey">
+                  Snooker: {formatINR(dayWiseCollections.totalSnooker)} • Pool: {formatINR(dayWiseCollections.totalPool)}
+                </p>
+              </div>
+            </div>
+
+            {/* Game Revenue Distribution Breakdown Bar */}
+            <div className="p-5 rounded-2xl bg-charcoal/80 border border-white/5 space-y-3">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-bold uppercase tracking-wider text-warmivory">Facility Revenue Distribution</span>
+                <span className="text-mutedgrey">100% of period revenue</span>
+              </div>
+
+              <div className="w-full h-3 rounded-full bg-obsidian overflow-hidden flex">
+                <div
+                  style={{ width: `${dayWiseCollections.totalGross > 0 ? (dayWiseCollections.totalSnooker / dayWiseCollections.totalGross) * 100 : 33}%` }}
+                  className="h-full bg-gradient-to-r from-champagne to-warmgold transition-all"
+                  title="Snooker Table"
+                />
+                <div
+                  style={{ width: `${dayWiseCollections.totalGross > 0 ? (dayWiseCollections.totalPool / dayWiseCollections.totalGross) * 100 : 33}%` }}
+                  className="h-full bg-cuexemerald transition-all"
+                  title="Pool Table"
+                />
+                <div
+                  style={{ width: `${dayWiseCollections.totalGross > 0 ? (dayWiseCollections.totalPs5 / dayWiseCollections.totalGross) * 100 : 34}%` }}
+                  className="h-full bg-blue-500 transition-all"
+                  title="PS5 Gaming"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center gap-6 text-xs pt-1">
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded-full bg-champagne" />
+                  <span className="text-warmivory font-semibold">Snooker: {formatINR(dayWiseCollections.totalSnooker)}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded-full bg-cuexemerald" />
+                  <span className="text-warmivory font-semibold">Pool: {formatINR(dayWiseCollections.totalPool)}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded-full bg-blue-500" />
+                  <span className="text-warmivory font-semibold">PS5: {formatINR(dayWiseCollections.totalPs5)}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Day-by-Day Detailed Breakdown */}
+            <div className="space-y-4">
+              <h3 className="font-display text-xl text-warmivory uppercase tracking-wide">
+                Day-by-Day Ledger ({dayWiseCollections.list.length} Days)
+              </h3>
+
+              {dayWiseCollections.list.length === 0 ? (
+                <div className="py-12 rounded-2xl bg-charcoal/40 border border-white/5 text-center text-mutedgrey text-xs">
+                  No financial collection recorded for this date range.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {dayWiseCollections.list.map((day) => {
+                    const isExpanded = selectedDayDetail === day.dateStr;
+                    return (
+                      <div
+                        key={day.dateStr}
+                        className="rounded-2xl bg-charcoal/80 border border-white/5 hover:border-champagne/30 transition-all overflow-hidden"
+                      >
+                        <div
+                          onClick={() => setSelectedDayDetail(isExpanded ? null : day.dateStr)}
+                          className="p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 cursor-pointer select-none"
+                        >
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-3">
+                              <span className="font-display text-2xl text-warmivory">
+                                {day.formattedDate}
+                              </span>
+                              {day.isToday && (
+                                <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-extrabold text-[10px] uppercase tracking-wider border border-emerald-500/30">
+                                  Today
+                                </span>
+                              )}
+                              <span className="font-mono text-xs text-mutedgrey">
+                                {day.dateStr}
+                              </span>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-3 text-xs text-mutedgrey">
+                              <span>{day.totalBookings} total session(s)</span>
+                              <span>•</span>
+                              <span className="text-emerald-400 font-medium">{day.confirmedCount + day.completedCount} successful</span>
+                              {day.cancelledCount > 0 && (
+                                <>
+                                  <span>•</span>
+                                  <span className="text-red-400 font-medium">{day.cancelledCount} cancelled/no-show</span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-6">
+                            <div className="flex flex-col md:items-end">
+                              <span className="text-[10px] uppercase tracking-widest text-mutedgrey">Total Collection</span>
+                              <span className="font-display text-2xl text-champagne font-bold">
+                                {formatINR(day.totalRevenue)}
+                              </span>
+                            </div>
+
+                            <button className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-semibold text-warmivory">
+                              {isExpanded ? 'Hide Details ▲' : 'View Bookings ▼'}
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Facility breakdown mini-bar */}
+                        <div className="px-5 pb-4 grid grid-cols-3 gap-2 border-t border-white/5 pt-3 text-xs">
+                          <div className="p-2 rounded-xl bg-obsidian/60 border border-white/5">
+                            <span className="text-[10px] text-champagne uppercase font-bold">Snooker</span>
+                            <p className="font-bold text-warmivory">{formatINR(day.snookerRevenue)}</p>
+                            <span className="text-[10px] text-mutedgrey">{day.snookerCount} frame(s)/hr</span>
+                          </div>
+                          <div className="p-2 rounded-xl bg-obsidian/60 border border-white/5">
+                            <span className="text-[10px] text-emerald-400 uppercase font-bold">Pool</span>
+                            <p className="font-bold text-warmivory">{formatINR(day.poolRevenue)}</p>
+                            <span className="text-[10px] text-mutedgrey">{day.poolCount} game(s)/hr</span>
+                          </div>
+                          <div className="p-2 rounded-xl bg-obsidian/60 border border-white/5">
+                            <span className="text-[10px] text-blue-400 uppercase font-bold">PS5</span>
+                            <p className="font-bold text-warmivory">{formatINR(day.ps5Revenue)}</p>
+                            <span className="text-[10px] text-mutedgrey">{day.ps5Count} session(s)</span>
+                          </div>
+                        </div>
+
+                        {/* Expanded Booking List for this specific day */}
+                        {isExpanded && (
+                          <div className="p-5 bg-obsidian/80 border-t border-white/10 space-y-2">
+                            <p className="text-xs font-bold text-mutedgrey uppercase tracking-wider pb-1">
+                              Individual Bookings on {day.formattedDate}:
+                            </p>
+                            {day.bookings.map((b) => (
+                              <div
+                                key={b.id}
+                                className="p-3 rounded-xl bg-charcoal/80 border border-white/5 flex items-center justify-between gap-3 text-xs"
+                              >
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-mono text-champagne font-bold">{b.booking_reference}</span>
+                                    <span className="font-semibold text-warmivory">{b.customer_name}</span>
+                                    <span className="text-mutedgrey">({b.resource_id.toUpperCase()})</span>
+                                  </div>
+                                  <p className="text-[11px] text-mutedgrey">
+                                    {formatToIST(b.start_at)} – {formatToIST(b.end_at)} ({b.duration_minutes}m)
+                                  </p>
+                                </div>
+                                <div className="flex items-center gap-3">
+                                  <span className="font-bold text-warmivory">{formatINR(b.total_amount)}</span>
+                                  <span className={`text-[9px] uppercase font-bold px-2 py-0.5 rounded-full ${statusColour(b.status)}`}>
+                                    {b.status}
+                                  </span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* TAB: SEPARATE VENUE CONTROLS & PRICING MANAGEMENT */}
+        {activeTab === 'controls' && (
+          <div className="space-y-8 animate-in fade-in duration-200">
+            <div>
+              <h2 className="font-display text-2xl text-warmivory uppercase tracking-wide flex items-center gap-2">
+                <Sliders className="w-6 h-6 text-champagne" />
+                Venue Controls & Price Management
+              </h2>
+              <p className="text-xs text-mutedgrey mt-1">
+                Change pricing live, mark holiday day-offs or emergency closures, manage operating hours, and execute quick operations.
+              </p>
+            </div>
+
+            {/* Quick Operations Strip */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <button
+                onClick={() => setShowManualModal(true)}
+                className="p-5 rounded-2xl bg-gradient-to-r from-champagne/15 via-warmgold/10 to-champagne/15 border-2 border-champagne/40 hover:border-champagne text-left transition-all group"
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-display text-lg text-champagne uppercase">Manual Walk-in Booking</span>
+                  <UserPlus className="w-5 h-5 text-champagne group-hover:scale-110 transition-transform" />
+                </div>
+                <p className="text-xs text-mutedgrey">
+                  Directly lock a table for a customer standing at the counter. Zero collision guarantee.
+                </p>
+              </button>
+
+              <button
+                onClick={() => {
+                  setBlockResource('all');
+                  setBlockStart(`${getISTDateString()}T08:00`);
+                  setBlockEnd(`${getISTDateString()}T23:59`);
+                  setActiveTab('blocked');
+                }}
+                className="p-5 rounded-2xl bg-gradient-to-r from-red-500/15 via-charcoal to-red-500/10 border-2 border-red-500/30 hover:border-red-500/60 text-left transition-all group"
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-display text-lg text-red-400 uppercase">Schedule Table Maintenance</span>
+                  <Ban className="w-5 h-5 text-red-400 group-hover:scale-110 transition-transform" />
+                </div>
+                <p className="text-xs text-mutedgrey">
+                  Block an individual table or the whole venue for repairs, tournaments, or private parties.
+                </p>
+              </button>
+            </div>
+
+            {/* 1. Live Price Editor */}
+            <form onSubmit={handleSavePrices} className="p-6 sm:p-8 rounded-3xl bg-charcoal/80 border border-white/10 space-y-6">
+              <div className="flex items-center justify-between pb-4 border-b border-white/10">
+                <div>
+                  <h3 className="font-display text-xl text-warmivory uppercase tracking-wide">
+                    Live Pricing Configuration
+                  </h3>
+                  <p className="text-xs text-mutedgrey mt-0.5">
+                    Changes apply immediately to online booking calculations and walk-in counters.
+                  </p>
+                </div>
+                <button
+                  type="submit"
+                  disabled={savingPrices}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-champagne to-warmgold text-obsidian text-xs font-bold uppercase tracking-wider shadow-gold-glow hover:scale-102 transition-all flex items-center gap-2 disabled:opacity-50"
+                >
+                  {savingPrices ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                  {savingPrices ? 'Saving…' : 'Save Pricing Changes'}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                {/* Pool Table Rates */}
+                <div className="p-5 rounded-2xl bg-obsidian border border-emerald-500/30 space-y-4">
+                  <div className="flex items-center gap-2 text-emerald-400">
+                    <CircleDot className="w-5 h-5" />
+                    <h4 className="font-display text-lg uppercase tracking-wide">Pool Table</h4>
+                  </div>
+                  <div className="space-y-3 text-xs">
+                    <div>
+                      <label className="block text-mutedgrey mb-1">Per Game (Match Mode) Rate (₹):</label>
+                      <input
+                        type="number"
+                        value={pricePoolMatch}
+                        onChange={(e) => setPricePoolMatch(Number(e.target.value))}
+                        className="w-full px-3 py-2 rounded-xl bg-charcoal border border-white/10 focus:border-champagne text-warmivory outline-none font-bold text-sm"
+                        required
+                      />
+                      <span className="text-[10px] text-mutedgrey mt-0.5 block">Configured as ₹40 for one game</span>
+                    </div>
+                    <div>
+                      <label className="block text-mutedgrey mb-1">Standard Hourly Rate (₹):</label>
+                      <input
+                        type="number"
+                        value={pricePoolHourly}
+                        onChange={(e) => setPricePoolHourly(Number(e.target.value))}
+                        className="w-full px-3 py-2 rounded-xl bg-charcoal border border-white/10 focus:border-champagne text-warmivory outline-none font-bold text-sm"
+                        required
+                      />
+                      <span className="text-[10px] text-mutedgrey mt-0.5 block">60 minutes full table access (₹120)</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Snooker Table Rates */}
+                <div className="p-5 rounded-2xl bg-obsidian border border-champagne/30 space-y-4">
+                  <div className="flex items-center gap-2 text-champagne">
+                    <Trophy className="w-5 h-5" />
+                    <h4 className="font-display text-lg uppercase tracking-wide">Snooker Table</h4>
+                  </div>
+                  <div className="space-y-3 text-xs">
+                    <div>
+                      <label className="block text-mutedgrey mb-1">Per Frame Rate (₹):</label>
+                      <input
+                        type="number"
+                        value={priceSnookerMatch}
+                        onChange={(e) => setPriceSnookerMatch(Number(e.target.value))}
+                        className="w-full px-3 py-2 rounded-xl bg-charcoal border border-white/10 focus:border-champagne text-warmivory outline-none font-bold text-sm"
+                        required
+                      />
+                      <span className="text-[10px] text-mutedgrey mt-0.5 block">Configured as ₹120 for one frame</span>
+                    </div>
+                    <div>
+                      <label className="block text-mutedgrey mb-1">Standard Hourly Rate (₹):</label>
+                      <input
+                        type="number"
+                        value={priceSnookerHourly}
+                        onChange={(e) => setPriceSnookerHourly(Number(e.target.value))}
+                        className="w-full px-3 py-2 rounded-xl bg-charcoal border border-white/10 focus:border-champagne text-warmivory outline-none font-bold text-sm"
+                        required
+                      />
+                      <span className="text-[10px] text-mutedgrey mt-0.5 block">Configured as ₹360 for an hour</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* PS5 Gaming Station Rates */}
+                <div className="p-5 rounded-2xl bg-obsidian border border-blue-500/30 space-y-4">
+                  <div className="flex items-center gap-2 text-blue-400">
+                    <Gamepad2 className="w-5 h-5" />
+                    <h4 className="font-display text-lg uppercase tracking-wide">PS5 Station</h4>
+                  </div>
+                  <div className="space-y-3 text-xs">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-mutedgrey mb-1">Single 1 Hr (₹):</label>
+                        <input
+                          type="number"
+                          value={pricePs5Single1}
+                          onChange={(e) => setPricePs5Single1(Number(e.target.value))}
+                          className="w-full px-3 py-2 rounded-xl bg-charcoal border border-white/10 text-warmivory outline-none font-bold"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-mutedgrey mb-1">Single 2 Hrs (₹):</label>
+                        <input
+                          type="number"
+                          value={pricePs5Single2}
+                          onChange={(e) => setPricePs5Single2(Number(e.target.value))}
+                          className="w-full px-3 py-2 rounded-xl bg-charcoal border border-white/10 text-warmivory outline-none font-bold"
+                          required
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-mutedgrey mb-1">2 Players 1 Hr (₹):</label>
+                        <input
+                          type="number"
+                          value={pricePs5Two1}
+                          onChange={(e) => setPricePs5Two1(Number(e.target.value))}
+                          className="w-full px-3 py-2 rounded-xl bg-charcoal border border-white/10 text-warmivory outline-none font-bold"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-mutedgrey mb-1">2 Players 2 Hrs (₹):</label>
+                        <input
+                          type="number"
+                          value={pricePs5Two2}
+                          onChange={(e) => setPricePs5Two2(Number(e.target.value))}
+                          className="w-full px-3 py-2 rounded-xl bg-charcoal border border-white/10 text-warmivory outline-none font-bold"
+                          required
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </form>
+
+            {/* 2. Venue Day-Off & Specific Date Closure Controls */}
+            <div className="p-6 sm:p-8 rounded-3xl bg-charcoal/80 border border-white/10 space-y-6">
+              <div>
+                <h3 className="font-display text-xl text-warmivory uppercase tracking-wide">
+                  Venue Holiday & Day-Off Controls
+                </h3>
+                <p className="text-xs text-mutedgrey mt-0.5">
+                  Turn off bookings for any specific calendar date, holiday, or toggle regular weekly operating days.
+                </p>
+              </div>
+
+              {/* Specific Date Blackout Form */}
+              <form onSubmit={handleMarkDateClosed} className="p-5 rounded-2xl bg-obsidian border border-white/10 space-y-4">
+                <p className="text-xs font-bold text-warmivory uppercase tracking-wide">
+                  Mark Full-Day Closure for a Specific Date
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-[11px] text-mutedgrey mb-1">Closure Date:</label>
+                    <input
+                      type="date"
+                      value={holidayDate}
+                      onChange={(e) => setHolidayDate(e.target.value)}
+                      className="w-full px-3 py-2.5 rounded-xl bg-charcoal border border-white/10 text-warmivory text-xs outline-none focus:border-champagne"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-mutedgrey mb-1">Reason for Closure:</label>
+                    <input
+                      type="text"
+                      value={holidayReason}
+                      onChange={(e) => setHolidayReason(e.target.value)}
+                      placeholder="e.g. Festival Holiday / Tournament"
+                      className="w-full px-3 py-2.5 rounded-xl bg-charcoal border border-white/10 text-warmivory text-xs outline-none focus:border-champagne"
+                      required
+                    />
+                  </div>
+                  <div className="flex items-end">
+                    <button
+                      type="submit"
+                      disabled={savingHoliday}
+                      className="w-full py-2.5 rounded-xl bg-red-500/20 border border-red-500/40 text-red-400 font-bold text-xs uppercase tracking-wider hover:bg-red-500/30 transition-all flex items-center justify-center gap-2"
+                    >
+                      {savingHoliday ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Ban className="w-4 h-4" />}
+                      Close Venue on This Date
+                    </button>
+                  </div>
+                </div>
+              </form>
+
+              {/* Weekly Schedule Toggles */}
+              <div className="space-y-3">
+                <p className="text-xs font-bold text-warmivory uppercase tracking-wide">
+                  Weekly Operating Schedule (7 Days)
+                </p>
+                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+                  {openingHours.map((oh) => {
+                    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+                    return (
+                      <div
+                        key={oh.day_of_week}
+                        className={`p-3.5 rounded-xl border flex flex-col justify-between gap-2 text-center transition-all ${
+                          oh.is_closed
+                            ? 'bg-red-500/10 border-red-500/30 text-red-400'
+                            : 'bg-obsidian border-white/10 text-warmivory'
+                        }`}
+                      >
+                        <span className="font-bold text-xs uppercase">{days[oh.day_of_week]}</span>
+                        <span className="text-[10px] text-mutedgrey">
+                          {oh.is_closed ? 'CLOSED' : `${oh.open_time.slice(0, 5)} - ${oh.close_time.slice(0, 5)}`}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleDayOfWeekClosed(oh.day_of_week, oh.is_closed)}
+                          className={`mt-1 py-1 rounded-lg text-[10px] font-bold uppercase transition-all ${
+                            oh.is_closed
+                              ? 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30'
+                              : 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                          }`}
+                        >
+                          {oh.is_closed ? 'Re-open' : 'Turn Off'}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
