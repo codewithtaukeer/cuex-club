@@ -50,7 +50,7 @@ export const Navbar: React.FC = () => {
             : 'py-3.5 md:py-5 bg-gradient-to-b from-obsidian/90 via-obsidian/30 to-transparent'
         }`}
       >
-        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
+        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4 relative">
           {/* Brand Logo */}
           <Link to="/" className="flex items-center gap-2 sm:gap-3 group shrink-0">
             <div className="relative w-9 h-9 sm:w-11 sm:h-11 rounded-full overflow-hidden border border-champagne/40 group-hover:border-champagne transition-all duration-300 shadow-[0_0_15px_rgba(214,167,84,0.2)] shrink-0">
@@ -70,8 +70,8 @@ export const Navbar: React.FC = () => {
             </div>
           </Link>
 
-          {/* Desktop Floating Pill Navigation Bar (Matching Reference Layout) */}
-          <div className="hidden lg:flex items-center gap-1 p-1.5 rounded-full bg-[#141615]/85 backdrop-blur-xl border border-white/10 shadow-[0_10px_35px_rgba(0,0,0,0.5)]">
+          {/* Desktop Floating Pill Navigation Bar — absolutely centered */}
+          <div className="hidden lg:flex absolute left-1/2 -translate-x-1/2 items-center gap-1 p-1.5 rounded-full bg-[#141615]/85 backdrop-blur-xl border border-white/10 shadow-[0_10px_35px_rgba(0,0,0,0.5)]">
             {navLinks.map((link) => {
               const isActive = location.pathname === link.path;
               return (
