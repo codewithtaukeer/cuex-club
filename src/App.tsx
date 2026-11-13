@@ -61,9 +61,11 @@ export const App: React.FC = () => {
         <Routes>
           {/* Admin PWA — full-screen mobile app, no website chrome */}
           <Route path="/admin-app" element={
-            <Suspense fallback={<RouteLoader />}>
-              <AdminAppPage />
-            </Suspense>
+            <ErrorBoundary>
+              <Suspense fallback={<RouteLoader />}>
+                <AdminAppPage />
+              </Suspense>
+            </ErrorBoundary>
           } />
 
           {/* Main website with shared Navbar/Footer */}

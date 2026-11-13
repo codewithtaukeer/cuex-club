@@ -2,7 +2,7 @@
   "name": "CueX Admin",
   "short_name": "CueX Admin",
   "description": "CueX Owner Dashboard — manage bookings, receive instant alerts, control your venue.",
-  "start_url": "/admin",
+  "start_url": "/admin-app",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
@@ -28,14 +28,21 @@
       "name": "Pending Requests",
       "short_name": "Pending",
       "description": "View pending booking requests",
-      "url": "/admin?tab=pending",
+      "url": "/admin-app?tab=pending",
       "icons": [{ "src": "/assets/cuex-logo.png", "sizes": "96x96" }]
     },
     {
       "name": "Walk-in Booking",
       "short_name": "Walk-in",
       "description": "Create a manual walk-in booking",
-      "url": "/admin?tab=walkin",
+      "url": "/admin-app?tab=walkin",
+      "icons": [{ "src": "/assets/cuex-logo.png", "sizes": "96x96" }]
+    },
+    {
+      "name": "Day-Wise Collection",
+      "short_name": "Collection",
+      "description": "View daily revenue collections",
+      "url": "/admin-app?tab=collection",
       "icons": [{ "src": "/assets/cuex-logo.png", "sizes": "96x96" }]
     }
   ]
