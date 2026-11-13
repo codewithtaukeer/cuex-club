@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Menu, X, Calendar, LogOut, Shield, Phone, MessageSquare, LogIn } from 'lucide-react';
+import { Menu, X, Calendar, LogOut, Shield, Phone, MessageSquare, LogIn, Smartphone } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { VENUE_INFO } from '../../lib/utils';
 
@@ -327,17 +327,31 @@ export const Navbar: React.FC = () => {
               </Link>
 
               {isAdmin && (
-                <Link
-                  to="/admin"
-                  onClick={() => setMobileMenuOpen(false)}
-                  className="text-base font-display tracking-widest text-warmgold flex items-center justify-between py-2 px-3 rounded-lg bg-warmgold/10 border border-warmgold/20"
-                >
-                  <span className="flex items-center gap-2">
-                    <Shield className="w-4 h-4" />
-                    Admin Panel
-                  </span>
-                  <span className="text-[10px] bg-warmgold/20 text-warmgold px-2 py-0.5 rounded-full">Owner</span>
-                </Link>
+                <>
+                  <Link
+                    to="/admin-app"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="text-base font-display tracking-widest text-emerald-400 flex items-center justify-between py-2 px-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Smartphone className="w-4 h-4" />
+                      Admin Phone App
+                    </span>
+                    <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full font-bold">PWA</span>
+                  </Link>
+
+                  <Link
+                    to="/admin"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="text-base font-display tracking-widest text-warmgold flex items-center justify-between py-2 px-3 rounded-lg bg-warmgold/10 border border-warmgold/20"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Shield className="w-4 h-4" />
+                      Admin Dashboard
+                    </span>
+                    <span className="text-[10px] bg-warmgold/20 text-warmgold px-2 py-0.5 rounded-full">Owner</span>
+                  </Link>
+                </>
               )}
             </div>
           </div>

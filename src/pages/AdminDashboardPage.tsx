@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import {
   Shield,
   Calendar,
@@ -22,6 +22,7 @@ import {
   Volume2,
   VolumeX,
   BellRing,
+  Smartphone,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
@@ -547,6 +548,14 @@ export const AdminDashboardPage: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
+            <Link
+              to="/admin-app"
+              className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500/20 via-cuexemerald/30 to-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 hover:bg-emerald-500/30 transition-all shadow-md"
+              title="Open Phone App View with native bottom navigation and push alerts"
+            >
+              <Smartphone className="w-3.5 h-3.5" />
+              Phone App View
+            </Link>
             <button
               onClick={() => setShowManualModal(true)}
               className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-champagne via-warmgold to-champagne text-obsidian text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 shadow-gold-glow hover:scale-102 transition-transform"
