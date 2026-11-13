@@ -311,7 +311,27 @@ export const AdminDashboardPage: React.FC = () => {
     }
   };
 
-  // Handle Manual Walk-in Booking Submission
+  // Handle Re-open Slot with atomic database verification
+  const handleReopenSlot = async (b: CuexBooking) => {
+    try {
+      const { error } = await supabase.rpc('cuex_admin_reopen_slot', {
+        p_booking_id: b.id,
+      });
+      if (error) throw error;
+      setFeedbackMsg({
+        type: 'success',
+        text: `Slot for ${b.booking_reference} successfully verified and re-opened!`,
+      });
+      loadAllAdminData();
+    } catch (err: any) {
+      setFeedbackMsg({
+        type: 'error',
+        text: err.message || 'Cannot re-open: this slot may conflict with another booking or maintenance block.',
+      });
+    }
+  };
+
+  // Handle Manual Walk-in Booking Submission via transaction-safe RPC
   const handleCreateManualBooking = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!manualName.trim() || !manualPhone.trim() || !manualDate || !manualTime) {
@@ -322,30 +342,24 @@ export const AdminDashboardPage: React.FC = () => {
     setSavingManualBooking(true);
     try {
       const startDateTime = new Date(`${manualDate}T${manualTime}:00+05:30`);
-      const endDateTime = new Date(startDateTime.getTime() + manualDuration * 60 * 1000);
-      const reference = 'CX-M' + Math.floor(1000 + Math.random() * 9000);
 
-      const { error } = await supabase.from('cuex_bookings').insert({
-        booking_reference: reference,
-        user_id: user?.id,
-        resource_id: manualResource,
-        customer_name: manualName.trim(),
-        customer_phone: manualPhone.trim(),
-        number_of_players: manualPlayers,
-        booking_mode: manualDuration <= 30 ? 'match' : 'hourly',
-        start_at: startDateTime.toISOString(),
-        end_at: endDateTime.toISOString(),
-        duration_minutes: manualDuration,
-        total_amount: manualAmount,
-        status: 'confirmed',
-        customer_notes: manualNotes.trim() || null,
+      const { data, error } = await supabase.rpc('cuex_admin_manual_book', {
+        p_resource_id: manualResource,
+        p_start_at: startDateTime.toISOString(),
+        p_duration_minutes: manualDuration,
+        p_customer_name: manualName.trim(),
+        p_customer_phone: manualPhone.trim(),
+        p_total_amount: manualAmount,
+        p_notes: manualNotes.trim() || null,
+        p_number_of_players: manualPlayers,
       });
 
       if (error) throw error;
+      const created = data as CuexBooking;
 
       setFeedbackMsg({
         type: 'success',
-        text: `Manual reservation created successfully! Ref: ${reference} (${manualResource.toUpperCase()})`,
+        text: `Manual reservation created with collision check! Ref: ${created?.booking_reference || 'Confirmed'} (${manualResource.toUpperCase()})`,
       });
       setShowManualModal(false);
       loadAllAdminData();
@@ -438,31 +452,45 @@ export const AdminDashboardPage: React.FC = () => {
     }
   };
 
-  // Export to CSV
+  // Export to CSV with formula injection defense and Blob download
   const handleExportCSV = () => {
     if (bookings.length === 0) return;
-    const headers = ['Reference,Resource,Customer Name,Phone,Date,Start,End,Duration,Total Amount,Status'];
+    
+    // Sanitize any cell to prevent spreadsheet formula injection (=, +, -, @)
+    const sanitize = (val: string | number | null | undefined): string => {
+      if (val === null || val === undefined) return '""';
+      let str = String(val).replace(/"/g, '""');
+      if (/^[=+\-@]/.test(str)) {
+        str = "'" + str;
+      }
+      return `"${str}"`;
+    };
+
+    const headers = ['Reference', 'Resource', 'Customer Name', 'Phone', 'Date', 'Start', 'End', 'Duration (Mins)', 'Total Amount (INR)', 'Status'].map(h => `"${h}"`).join(',');
+    
     const rows = bookings.map((b) => [
-      b.booking_reference,
-      b.resource_id,
-      `"${b.customer_name}"`,
-      b.customer_phone,
-      formatDateIST(b.start_at),
-      formatToIST(b.start_at),
-      formatToIST(b.end_at),
-      b.duration_minutes,
-      b.total_amount,
-      b.status,
+      sanitize(b.booking_reference),
+      sanitize(b.resource_id.toUpperCase()),
+      sanitize(b.customer_name),
+      `"\t${b.customer_phone}"`, // Tab prefix prevents scientific notation in Excel
+      sanitize(formatDateIST(b.start_at)),
+      sanitize(formatToIST(b.start_at)),
+      sanitize(formatToIST(b.end_at)),
+      sanitize(b.duration_minutes),
+      sanitize(b.total_amount),
+      sanitize(b.status.toUpperCase()),
     ].join(','));
 
-    const csvContent = 'data:text/csv;charset=utf-8,' + [headers, ...rows].join('\n');
-    const encodedUri = encodeURI(csvContent);
+    const csvContent = '\uFEFF' + [headers, ...rows].join('\r\n'); // UTF-8 BOM for Excel compatibility
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `cuex_bookings_${getISTDateString()}.csv`);
+    link.href = url;
+    link.setAttribute('download', `cuex_reservations_${getISTDateString()}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   // Filtered Bookings logic
@@ -1058,8 +1086,9 @@ export const AdminDashboardPage: React.FC = () => {
 
                       {(b.status === 'cancelled' || b.status === 'expired' || b.status === 'rejected') && (
                         <button
-                          onClick={() => handleUpdateStatus(b.id, 'confirmed')}
+                          onClick={() => handleReopenSlot(b)}
                           className="px-3 py-1.5 rounded-lg bg-cuexemerald/15 border border-cuexemerald/30 text-emerald-400 text-xs font-semibold hover:bg-cuexemerald/25"
+                          title="Verify slot collision before re-opening"
                         >
                           Re-open Slot
                         </button>

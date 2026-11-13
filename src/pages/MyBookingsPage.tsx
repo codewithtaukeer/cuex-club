@@ -4,7 +4,7 @@ import { Calendar, MessageSquare, ArrowRight, Phone, HelpCircle, Ticket } from '
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import type { CuexBooking } from '../types';
-import { formatToIST, formatDateIST, formatINR, generateBookingWhatsAppLink, generateGoogleCalendarUrl, VENUE_INFO } from '../lib/utils';
+import { formatToIST, formatDateIST, formatINR, generateGoogleCalendarUrl, VENUE_INFO } from '../lib/utils';
 import { BookingInvoiceModal } from '../components/booking/BookingInvoiceModal';
 
 export const MyBookingsPage: React.FC = () => {
@@ -12,6 +12,7 @@ export const MyBookingsPage: React.FC = () => {
   const [bookings, setBookings] = useState<CuexBooking[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedInvoiceBooking, setSelectedInvoiceBooking] = useState<CuexBooking | null>(null);
+  const [refLookup, setRefLookup] = useState<string>('');
   const [phoneLookup, setPhoneLookup] = useState<string>(() => {
     try {
       return localStorage.getItem('cuex_guest_phone') || '';
@@ -20,38 +21,54 @@ export const MyBookingsPage: React.FC = () => {
     }
   });
 
-  const fetchBookings = async (phoneToQuery?: string) => {
+  const fetchBookings = async (phoneToQuery?: string, refToQuery?: string) => {
     setLoading(true);
     try {
-      let query = supabase.from('cuex_bookings').select('*');
-
       if (user) {
-        query = query.eq('user_id', user.id);
+        // Authenticated user lookup via RLS
+        const { data, error } = await supabase
+          .from('cuex_bookings')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('start_at', { ascending: false });
+        if (error) throw error;
+        setBookings((data as CuexBooking[]) || []);
       } else {
-        const targetPhone = phoneToQuery || phoneLookup;
+        // Secure Guest lookup via dedicated RPC function (protects database from public table scraping)
+        const targetPhone = phoneToQuery !== undefined ? phoneToQuery : phoneLookup;
+        const targetRef = refToQuery !== undefined ? refToQuery : refLookup;
         const clean = targetPhone.replace(/\D/g, '');
         const digits = clean.startsWith('91') && clean.length === 12 ? clean.slice(2) : clean.startsWith('0') && clean.length === 11 ? clean.slice(1) : clean;
+        
         if (!digits || digits.length < 10) {
           setBookings([]);
           setLoading(false);
           return;
         }
-        query = query.eq('customer_phone', `+91${digits}`);
-      }
 
-      const { data, error } = await query.order('start_at', { ascending: false });
-      if (error) throw error;
-      setBookings((data as CuexBooking[]) || []);
+        const { data, error } = await supabase.rpc('cuex_lookup_guest_bookings', {
+          p_phone: `+91${digits}`,
+          p_booking_ref: targetRef.trim() || null,
+        });
+
+        if (error) throw error;
+        setBookings((data as CuexBooking[]) || []);
+      }
     } catch (err: any) {
       console.error('Error fetching bookings:', err);
+      setBookings([]);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    if (user || phoneLookup) {
+    if (user) {
       fetchBookings();
+    } else if (phoneLookup && phoneLookup.length >= 10) {
+      fetchBookings(phoneLookup, refLookup);
+    } else {
+      setBookings([]);
     }
   }, [user]);
 
@@ -90,11 +107,11 @@ export const MyBookingsPage: React.FC = () => {
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                fetchBookings(phoneLookup);
+                fetchBookings(phoneLookup, refLookup);
               }}
               className="flex flex-col sm:flex-row gap-2"
             >
-              <div className="relative flex-1 flex">
+              <div className="relative flex-[1.5] flex">
                 <span className="inline-flex items-center px-3.5 rounded-l-xl bg-obsidian border border-r-0 border-white/10 text-mutedgrey text-xs font-bold">
                   +91
                 </span>
@@ -109,10 +126,22 @@ export const MyBookingsPage: React.FC = () => {
                       localStorage.setItem('cuex_guest_phone', val);
                     } catch {}
                   }}
-                  placeholder="9876543210"
+                  placeholder="9876543210 (Mobile Number)"
                   className="w-full px-3.5 py-2.5 rounded-r-xl bg-obsidian border border-white/10 focus:border-champagne text-warmivory text-xs placeholder:text-mutedgrey/50 outline-none"
                 />
               </div>
+
+              <div className="relative flex-1">
+                <input
+                  type="text"
+                  maxLength={12}
+                  value={refLookup}
+                  onChange={(e) => setRefLookup(e.target.value.toUpperCase())}
+                  placeholder="Ref (e.g. CX-12345)"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-obsidian border border-white/10 focus:border-champagne text-warmivory text-xs placeholder:text-mutedgrey/50 outline-none uppercase font-mono"
+                />
+              </div>
+
               <button
                 type="submit"
                 disabled={loading || phoneLookup.replace(/\D/g, '').length < 10}
@@ -177,8 +206,7 @@ export const MyBookingsPage: React.FC = () => {
           <div className="space-y-4">
             {bookings.map((booking) => {
               const isPast = new Date(booking.end_at).getTime() < new Date().getTime();
-              const isCancelled = booking.status === 'cancelled' || booking.status === 'rejected';
-              const isUpcoming = !isPast && !isCancelled;
+              const isUpcoming = !isPast && (booking.status === 'confirmed' || booking.status === 'pending_confirmation' || booking.status === 'pending');
 
               const resourceTitle =
                 booking.resource_id === 'ps5'
@@ -187,14 +215,9 @@ export const MyBookingsPage: React.FC = () => {
                   ? 'Pool Table'
                   : 'Snooker Table';
 
-              const waLink = generateBookingWhatsAppLink({
-                booking_reference: booking.booking_reference,
-                resource_name: resourceTitle,
-                start_at: booking.start_at,
-                end_at: booking.end_at,
-                customer_name: booking.customer_name,
-                total_amount: booking.total_amount,
-              });
+              const waLink = `https://wa.me/916394149768?text=${encodeURIComponent(
+                `Hello CueX! 🎱\nI have a reservation inquiry:\n• Reference: *${booking.booking_reference}*\n• Facility: *${resourceTitle}*\n• Date: *${formatDateIST(booking.start_at)}*\n• Slot: *${formatToIST(booking.start_at)} – ${formatToIST(booking.end_at)}*\n• Status: *${booking.status.toUpperCase()}*`
+              )}`;
 
               const calLink = generateGoogleCalendarUrl({
                 booking_reference: booking.booking_reference,

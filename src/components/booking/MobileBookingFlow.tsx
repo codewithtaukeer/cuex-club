@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { Gamepad2, CircleDot, Trophy, User, CheckCircle, ArrowLeft, ArrowRight, AlertCircle, Loader2, Clock } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
@@ -7,24 +7,38 @@ import type { ResourceType, AvailabilitySlot, CuexBooking } from '../../types';
 import { formatToIST, formatDateIST, formatINR, getISTDateString } from '../../lib/utils';
 import { BookingSuccessModal } from './BookingSuccessModal';
 
+const VALID_FACILITIES: ResourceType[] = ['ps5', 'pool', 'snooker'];
+
 export const MobileBookingFlow: React.FC = () => {
   const { user, profile } = useAuth();
   const location = useLocation();
+  const requestIdRef = useRef<number>(0);
 
-  // Query params
+  // Parse and safely validate URL query params (P1-3 defense)
   const searchParams = new URLSearchParams(location.search);
-  const initialFacility = (searchParams.get('facility') as ResourceType) || 'pool';
-  const initialDate = searchParams.get('date') || getISTDateString();
-  const initialTime = searchParams.get('time') || '';
-  const initialDuration = Number(searchParams.get('duration')) || 60;
+  const rawFacility = searchParams.get('facility');
+  const initialFacility: ResourceType = VALID_FACILITIES.includes(rawFacility as ResourceType)
+    ? (rawFacility as ResourceType)
+    : 'pool';
 
-  // Step state (1: Game, 2: Date & Duration, 3: Time Slot, 4: Details & Summary)
-  const [currentStep, setCurrentStep] = useState<number>(initialTime ? 4 : 1);
+  const rawDate = searchParams.get('date');
+  const todayStr = getISTDateString();
+  const initialDate = rawDate && /^\d{4}-\d{2}-\d{2}$/.test(rawDate) && rawDate >= todayStr
+    ? rawDate
+    : todayStr;
+
+  const initialTime = searchParams.get('time') || '';
+  const rawDuration = Number(searchParams.get('duration'));
+  const initialDuration = [30, 60, 120].includes(rawDuration) ? rawDuration : 60;
+  const initialBookingMode: 'hourly' | 'match' = initialDuration <= 30 ? 'match' : 'hourly';
+
+  // Step state
+  const [currentStep, setCurrentStep] = useState<number>(1);
   const [selectedFacility, setSelectedFacility] = useState<ResourceType>(initialFacility);
   const [selectedDate, setSelectedDate] = useState<string>(initialDate);
   const [durationMinutes, setDurationMinutes] = useState<number>(initialDuration);
   const [numberOfPlayers, setNumberOfPlayers] = useState<number>(1);
-  const [bookingMode, setBookingMode] = useState<'hourly' | 'match'>('hourly');
+  const [bookingMode, setBookingMode] = useState<'hourly' | 'match'>(initialBookingMode);
   const [selectedSlot, setSelectedSlot] = useState<AvailabilitySlot | null>(null);
 
   // Customer form state
@@ -47,8 +61,9 @@ export const MobileBookingFlow: React.FC = () => {
     }
   }, [profile]);
 
-  // Fetch slots whenever facility, date, or duration changes
+  // Fetch slots whenever facility, date, or duration changes (P1-6: Race condition defense)
   const loadSlots = async () => {
+    const currentReqId = ++requestIdRef.current;
     setLoadingSlots(true);
     setErrorMsg(null);
     try {
@@ -58,30 +73,45 @@ export const MobileBookingFlow: React.FC = () => {
         p_duration_minutes: durationMinutes,
       });
 
+      if (currentReqId !== requestIdRef.current) {
+        // Discard stale out-of-order response
+        return;
+      }
+
       if (error) throw error;
       const fetchedSlots = (data as AvailabilitySlot[]) || [];
       setSlots(fetchedSlots);
 
-      // If initialTime provided, match it
+      // Match initialTime on first load if provided
       if (initialTime && !selectedSlot) {
         const match = fetchedSlots.find((s) => s.slot_start === initialTime);
         if (match && match.slot_status === 'available') {
           setSelectedSlot(match);
+          setCurrentStep(4);
         }
       }
     } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to load time slots.');
+      if (currentReqId === requestIdRef.current) {
+        setErrorMsg(err.message || 'Failed to load time slots.');
+      }
     } finally {
-      setLoadingSlots(false);
+      if (currentReqId === requestIdRef.current) {
+        setLoadingSlots(false);
+      }
     }
   };
 
   useEffect(() => {
+    // Clear selected slot whenever facility, date, or duration changes (P1-1: Stale slot defense)
+    setSelectedSlot(null);
     loadSlots();
   }, [selectedFacility, selectedDate, durationMinutes]);
 
   // Calculate live price
   const calculateEstimatedPrice = (): number => {
+    if (selectedSlot && selectedSlot.calculated_price !== undefined) {
+      return Number(selectedSlot.calculated_price);
+    }
     if (selectedFacility === 'ps5') {
       if (numberOfPlayers >= 2) {
         return durationMinutes >= 120 ? 349 : 249;
@@ -109,8 +139,9 @@ export const MobileBookingFlow: React.FC = () => {
       return;
     }
 
-    if (!/^[a-zA-Z\s.'-]+$/.test(trimmedName)) {
-      setErrorMsg('Please enter a valid name using letters only.');
+    // P1-7: Support Unicode / Hindi / Devanagari letters along with Latin
+    if (!/^[\p{L}\s.'-]+$/u.test(trimmedName)) {
+      setErrorMsg('Please enter a valid name using letters and spaces.');
       return;
     }
 
@@ -256,11 +287,14 @@ export const MobileBookingFlow: React.FC = () => {
                 key={item.id}
                 onClick={() => {
                   setSelectedFacility(item.id);
+                  setSelectedSlot(null);
                   if (item.id === 'ps5') {
                     setDurationMinutes(60);
+                    setBookingMode('hourly');
                   } else {
                     setDurationMinutes(60);
                     setBookingMode('hourly');
+                    setNumberOfPlayers(1);
                   }
                   setCurrentStep(2);
                 }}

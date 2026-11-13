@@ -10,7 +10,7 @@ interface AuthContextType {
   loading: boolean;
   isAdmin: boolean;
   signInWithEmail: (email: string, password: string) => Promise<{ error: Error | null }>;
-  signUpWithEmail: (email: string, password: string, fullName: string, phone: string) => Promise<{ error: Error | null; user: User | null }>;
+  signUpWithEmail: (email: string, password: string, fullName: string, phone: string) => Promise<{ error: Error | null; user: User | null; session?: Session | null }>;
   signInWithOtp: (phone: string) => Promise<{ error: Error | null }>;
   verifyOtp: (phone: string, token: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
@@ -49,27 +49,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         });
       }
 
-      // 2. Check if Admin in cuex_admins or profile role
+      // 2. Check if Admin strictly via cuex_admins table (DB gatekeeper)
       const { data: adminData } = await supabase
         .from('cuex_admins')
         .select('id')
         .eq('id', currentUser.id)
         .maybeSingle();
 
-      const isUserAdmin = !!adminData || profileData?.role === 'admin' || currentUser.email === 'admin@nexus.io';
-      setIsAdmin(isUserAdmin);
+      setIsAdmin(!!adminData);
     } catch (err) {
       console.error('Error fetching user profile:', err);
+      setIsAdmin(false);
     }
   };
 
   useEffect(() => {
-    // Initial session check
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    // Initial session check - await admin lookup BEFORE flipping loading to false
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
       setSession(session);
       setUser(session?.user ?? null);
       if (session?.user) {
-        fetchProfileAndAdminStatus(session.user);
+        await fetchProfileAndAdminStatus(session.user);
+      } else {
+        setProfile(null);
+        setIsAdmin(false);
       }
       setLoading(false);
     });
@@ -128,9 +131,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         });
       }
 
-      return { error: error ? new Error(error.message) : null, user: data.user };
+      return { error: error ? new Error(error.message) : null, user: data.user, session: data.session };
     } catch (err: any) {
-      return { error: err, user: null };
+      return { error: err, user: null, session: null };
     }
   };
 

@@ -5,6 +5,7 @@ import { Navbar } from './components/layout/Navbar';
 import { Footer } from './components/layout/Footer';
 import { CustomCursor } from './components/layout/CustomCursor';
 import { StickyBottomBar } from './components/layout/StickyBottomBar';
+import { ErrorBoundary } from './components/common/ErrorBoundary';
 
 // Lazy-loaded route components for high performance & fast initial load
 const Home = lazy(() => import('./pages/Home').then(m => ({ default: m.Home })));
@@ -45,20 +46,22 @@ export const App: React.FC = () => {
         <div className="flex flex-col min-h-screen bg-obsidian text-warmivory selection:bg-champagne selection:text-obsidian">
           <Navbar />
           <div className="flex-1">
-            <Suspense fallback={<RouteLoader />}>
-              <Routes>
-                <Route path="/" element={<Home />} />
-                <Route path="/booking" element={<BookingPage />} />
-                <Route path="/availability" element={<AvailabilityPage />} />
-                <Route path="/gallery" element={<GalleryPage />} />
-                <Route path="/about" element={<AboutPage />} />
-                <Route path="/contact" element={<ContactPage />} />
-                <Route path="/auth" element={<AuthPage />} />
-                <Route path="/my-bookings" element={<MyBookingsPage />} />
-                <Route path="/admin" element={<AdminDashboardPage />} />
-                <Route path="*" element={<Home />} />
-              </Routes>
-            </Suspense>
+            <ErrorBoundary>
+              <Suspense fallback={<RouteLoader />}>
+                <Routes>
+                  <Route path="/" element={<Home />} />
+                  <Route path="/booking" element={<BookingPage />} />
+                  <Route path="/availability" element={<AvailabilityPage />} />
+                  <Route path="/gallery" element={<GalleryPage />} />
+                  <Route path="/about" element={<AboutPage />} />
+                  <Route path="/contact" element={<ContactPage />} />
+                  <Route path="/auth" element={<AuthPage />} />
+                  <Route path="/my-bookings" element={<MyBookingsPage />} />
+                  <Route path="/admin" element={<AdminDashboardPage />} />
+                  <Route path="*" element={<Home />} />
+                </Routes>
+              </Suspense>
+            </ErrorBoundary>
           </div>
           <Footer />
           <StickyBottomBar />

@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { Phone, Mail, Lock, User, ArrowRight, ShieldCheck, AlertCircle, Loader2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { supabase } from '../lib/supabase';
 
 export const AuthPage: React.FC = () => {
-  const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
+  const [authMode, setAuthMode] = useState<'signin' | 'signup' | 'forgot'>('signin');
   const [authMethod, setAuthMethod] = useState<'email' | 'phone'>('email');
 
   // Form fields
@@ -20,16 +21,29 @@ export const AuthPage: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [infoMsg, setInfoMsg] = useState<string | null>(null);
 
-  const { signInWithEmail, signUpWithEmail, signInWithOtp, verifyOtp } = useAuth();
+  const { user, isAdmin, loading: authLoading, signInWithEmail, signUpWithEmail, signInWithOtp, verifyOtp } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
+  // Secure redirect target - prevents open redirect (P1-8)
   const searchParams = new URLSearchParams(location.search);
-  const redirectTarget = searchParams.get('redirect') || '/booking';
-  const facility = searchParams.get('facility');
-  const isAdminLogin = redirectTarget.includes('admin');
+  const rawRedirect = searchParams.get('redirect') || '/booking';
+  const safeRedirect = (rawRedirect.startsWith('/') && !rawRedirect.startsWith('//'))
+    ? rawRedirect
+    : '/booking';
 
-  const finalRedirect = facility ? `${redirectTarget}?facility=${facility}` : redirectTarget;
+  const isAdminLogin = safeRedirect === '/admin' || safeRedirect.startsWith('/admin');
+
+  // If already logged in, redirect away from /auth immediately
+  useEffect(() => {
+    if (!authLoading && user) {
+      if (isAdmin && isAdminLogin) {
+        navigate('/admin', { replace: true });
+      } else {
+        navigate(safeRedirect, { replace: true });
+      }
+    }
+  }, [user, isAdmin, authLoading, isAdminLogin, safeRedirect, navigate]);
 
   const handleEmailSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -41,20 +55,38 @@ export const AuthPage: React.FC = () => {
       if (authMode === 'signin') {
         const { error } = await signInWithEmail(email.trim(), password);
         if (error) throw error;
-        navigate(finalRedirect);
-      } else {
-        if (!fullName.trim()) {
-          throw new Error('Please enter your full name.');
+        navigate(safeRedirect);
+      } else if (authMode === 'signup') {
+        if (!fullName.trim() || fullName.trim().length < 2) {
+          throw new Error('Please enter your full name (minimum 2 characters).');
         }
-        if (!phone.trim()) {
-          throw new Error('Please enter your mobile phone number.');
+        
+        let cleanPhone = phone.replace(/\D/g, '');
+        if (cleanPhone.length === 12 && cleanPhone.startsWith('91')) cleanPhone = cleanPhone.slice(2);
+        if (cleanPhone.length !== 10 || !/^[6-9]\d{9}$/.test(cleanPhone)) {
+          throw new Error('Please enter a valid 10-digit Indian mobile number (e.g. 9876543210).');
         }
-        const { error } = await signUpWithEmail(email.trim(), password, fullName.trim(), phone.trim());
+
+        const { error, session } = await signUpWithEmail(email.trim(), password, fullName.trim(), `+91${cleanPhone}`);
         if (error) throw error;
-        setInfoMsg('Account created successfully! Signing you in...');
-        setTimeout(() => {
-          navigate(finalRedirect);
-        }, 800);
+
+        if (session) {
+          setInfoMsg('Account created successfully! Signing you in...');
+          setTimeout(() => {
+            navigate(safeRedirect);
+          }, 600);
+        } else {
+          setInfoMsg('Account registered! If confirmation is required, please check your inbox before logging in.');
+        }
+      } else if (authMode === 'forgot') {
+        if (!email.trim() || !email.includes('@')) {
+          throw new Error('Please enter your valid registered email address.');
+        }
+        const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+          redirectTo: `${window.location.origin}/auth?redirect=/admin`,
+        });
+        if (error) throw error;
+        setInfoMsg('Password reset instructions have been sent to your email.');
       }
     } catch (err: any) {
       setErrorMsg(err.message || 'Authentication error. Please check your credentials.');
@@ -74,8 +106,7 @@ export const AuthPage: React.FC = () => {
     try {
       const { error } = await signInWithOtp(phone.trim());
       if (error) {
-        // If SMS provider not yet configured on Supabase, offer email fallback
-        throw new Error(error.message + ' (Tip: You can also switch to Email login below for instant sign-in!)');
+        throw new Error(error.message || 'SMS OTP delivery is unavailable. Please sign in with your email and password.');
       }
       setOtpSent(true);
       setInfoMsg('OTP sent to your phone! Please enter the 6-digit code below.');
@@ -97,7 +128,7 @@ export const AuthPage: React.FC = () => {
     try {
       const { error } = await verifyOtp(phone.trim(), otpToken.trim());
       if (error) throw error;
-      navigate(finalRedirect);
+      navigate(safeRedirect);
     } catch (err: any) {
       setErrorMsg(err.message || 'Invalid or expired OTP.');
     } finally {
@@ -284,9 +315,24 @@ export const AuthPage: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-[11px] font-semibold text-mutedgrey uppercase tracking-wider mb-1">
-                  Password
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[11px] font-semibold text-mutedgrey uppercase tracking-wider">
+                    Password
+                  </label>
+                  {authMode === 'signin' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode('forgot');
+                        setErrorMsg(null);
+                        setInfoMsg(null);
+                      }}
+                      className="text-[11px] text-champagne hover:underline"
+                    >
+                      Forgot password?
+                    </button>
+                  )}
+                </div>
                 <div className="relative">
                   <Lock className="absolute left-3.5 top-3 w-4 h-4 text-mutedgrey" />
                   <input
@@ -318,6 +364,50 @@ export const AuthPage: React.FC = () => {
                   </>
                 )}
               </button>
+            </form>
+          )}
+
+          {/* FORM: FORGOT PASSWORD */}
+          {authMode === 'forgot' && (
+            <form onSubmit={handleEmailSubmit} className="space-y-4">
+              <div>
+                <label className="block text-[11px] font-semibold text-mutedgrey uppercase tracking-wider mb-1">
+                  Registered Email Address
+                </label>
+                <div className="relative">
+                  <Mail className="absolute left-3.5 top-3 w-4 h-4 text-mutedgrey" />
+                  <input
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@domain.com"
+                    className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-obsidian border border-white/10 focus:border-champagne text-warmivory text-xs outline-none"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-3.5 rounded-xl bg-gradient-to-r from-champagne via-warmgold to-champagne text-obsidian font-bold text-xs uppercase tracking-widest shadow-gold-glow hover:bg-warmgold flex items-center justify-center gap-2 mt-2"
+              >
+                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Send Reset Instructions</span>}
+              </button>
+
+              <div className="text-center pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode('signin');
+                    setErrorMsg(null);
+                    setInfoMsg(null);
+                  }}
+                  className="text-xs text-mutedgrey hover:text-warmivory underline"
+                >
+                  ← Back to Sign In
+                </button>
+              </div>
             </form>
           )}
 

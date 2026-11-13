@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import confetti from 'canvas-confetti';
-import { CheckCircle2, Clock, MessageSquare, Calendar as CalendarIcon, Phone, ArrowRight, RefreshCw, XCircle, Ticket } from 'lucide-react';
+import { CheckCircle2, Clock, MessageSquare, Calendar as CalendarIcon, Phone, ArrowRight, RefreshCw, XCircle, Ticket, X } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import type { CuexBooking, BookingStatus } from '../../types';
 import { formatToIST, formatDateIST, formatINR, generateBookingWhatsAppLink, generateGoogleCalendarUrl, VENUE_INFO } from '../../lib/utils';
@@ -42,6 +42,15 @@ export const BookingSuccessModal: React.FC<BookingSuccessModalProps> = ({ bookin
     return () => clearInterval(interval);
   }, [status]);
 
+  // Escape key closes modal (Accessibility)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
   // Realtime subscription for instant owner confirmation
   useEffect(() => {
     const channel = supabase
@@ -58,6 +67,11 @@ export const BookingSuccessModal: React.FC<BookingSuccessModalProps> = ({ bookin
           const updated = payload.new as CuexBooking;
           setCurrentBooking(updated);
           setStatus(updated.status);
+
+          if (updated.expires_at) {
+            const diff = Math.floor((new Date(updated.expires_at).getTime() - Date.now()) / 1000);
+            setTimeLeft(Math.max(0, diff));
+          }
 
           if (updated.status === 'confirmed') {
             confetti({
@@ -135,9 +149,26 @@ export const BookingSuccessModal: React.FC<BookingSuccessModalProps> = ({ bookin
   const isPending = status === 'pending_confirmation' || status === 'pending';
   const isRejected = status === 'rejected';
 
+  const isCancelled = status === 'cancelled';
+  const isCompleted = status === 'completed';
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-obsidian/95 backdrop-blur-xl animate-in fade-in duration-200 overflow-y-auto">
+    <div 
+      role="dialog" 
+      aria-modal="true" 
+      aria-labelledby="booking-modal-title"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-obsidian/95 backdrop-blur-xl animate-in fade-in duration-200 overflow-y-auto"
+    >
       <div className="max-w-lg w-full rounded-3xl bg-charcoal border border-champagne/40 p-6 sm:p-8 shadow-[0_0_60px_rgba(214,167,84,0.3)] relative text-center my-8">
+        {/* Close Button */}
+        <button
+          onClick={onClose}
+          className="absolute top-5 right-5 p-2 rounded-full bg-white/5 hover:bg-white/10 text-mutedgrey hover:text-warmivory transition-colors z-10"
+          title="Close dialog (Esc)"
+        >
+          <X className="w-5 h-5" />
+        </button>
+
         {/* State Icon Indicator */}
         {isConfirmed ? (
           <div className="w-16 h-16 rounded-full bg-cuexemerald/20 border border-cuexemerald flex items-center justify-center mx-auto mb-4 text-emerald-400 shadow-emerald-glow animate-bounce">
@@ -152,6 +183,14 @@ export const BookingSuccessModal: React.FC<BookingSuccessModalProps> = ({ bookin
           <div className="w-16 h-16 rounded-full bg-red-500/20 border border-red-500/50 flex items-center justify-center mx-auto mb-4 text-red-400">
             <XCircle className="w-8 h-8" />
           </div>
+        ) : isCancelled ? (
+          <div className="w-16 h-16 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center mx-auto mb-4 text-red-400">
+            <XCircle className="w-8 h-8" />
+          </div>
+        ) : isCompleted ? (
+          <div className="w-16 h-16 rounded-full bg-cuexemerald/20 border border-cuexemerald/40 flex items-center justify-center mx-auto mb-4 text-emerald-400">
+            <CheckCircle2 className="w-8 h-8" />
+          </div>
         ) : (
           <div className="w-16 h-16 rounded-full bg-charcoal border border-white/20 flex items-center justify-center mx-auto mb-4 text-mutedgrey">
             <Clock className="w-8 h-8" />
@@ -161,7 +200,7 @@ export const BookingSuccessModal: React.FC<BookingSuccessModalProps> = ({ bookin
         {/* Dynamic Titles */}
         {isConfirmed ? (
           <>
-            <h3 className="font-display text-4xl sm:text-5xl text-warmivory uppercase tracking-tight mb-2">
+            <h3 id="booking-modal-title" className="font-display text-4xl sm:text-5xl text-warmivory uppercase tracking-tight mb-2">
               YOU'RE IN!
             </h3>
             <p className="text-champagne font-display text-lg tracking-widest uppercase mb-1">
@@ -173,7 +212,7 @@ export const BookingSuccessModal: React.FC<BookingSuccessModalProps> = ({ bookin
           </>
         ) : isPending ? (
           <>
-            <h3 className="font-display text-3xl sm:text-4xl text-warmivory uppercase tracking-tight mb-2">
+            <h3 id="booking-modal-title" className="font-display text-3xl sm:text-4xl text-warmivory uppercase tracking-tight mb-2">
               BOOKING REQUEST RECEIVED!
             </h3>
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-bold uppercase tracking-wider mb-3">
@@ -197,20 +236,38 @@ export const BookingSuccessModal: React.FC<BookingSuccessModalProps> = ({ bookin
           </>
         ) : isRejected ? (
           <>
-            <h3 className="font-display text-3xl sm:text-4xl text-red-400 uppercase tracking-tight mb-2">
+            <h3 id="booking-modal-title" className="font-display text-3xl sm:text-4xl text-red-400 uppercase tracking-tight mb-2">
               REQUEST DECLINED
             </h3>
             <p className="text-xs text-mutedgrey mb-6">
               The requested slot could not be confirmed. Please select another slot or reach out to us.
             </p>
           </>
+        ) : isCancelled ? (
+          <>
+            <h3 id="booking-modal-title" className="font-display text-3xl sm:text-4xl text-red-400 uppercase tracking-tight mb-2">
+              RESERVATION CANCELLED
+            </h3>
+            <p className="text-xs text-mutedgrey mb-6">
+              This reservation has been cancelled by CueX administration.
+            </p>
+          </>
+        ) : isCompleted ? (
+          <>
+            <h3 id="booking-modal-title" className="font-display text-3xl sm:text-4xl text-champagne uppercase tracking-tight mb-2">
+              GAME COMPLETED
+            </h3>
+            <p className="text-xs text-mutedgrey mb-6">
+              Thank you for playing at CueX! We hope you enjoyed your session.
+            </p>
+          </>
         ) : (
           <>
-            <h3 className="font-display text-3xl sm:text-4xl text-mutedgrey uppercase tracking-tight mb-2">
+            <h3 id="booking-modal-title" className="font-display text-3xl sm:text-4xl text-mutedgrey uppercase tracking-tight mb-2">
               HOLD PERIOD EXPIRED
             </h3>
             <p className="text-xs text-mutedgrey mb-6">
-              The 15-minute temporary hold has elapsed without confirmation. Please submit a new request.
+              The temporary hold has elapsed without confirmation. Please submit a new request.
             </p>
           </>
         )}
