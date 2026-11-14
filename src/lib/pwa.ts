@@ -166,6 +166,94 @@ export async function sendAdminPush(payload: {
   }
 }
 
+// ─── Customer Push Subscription (with Phone) ─────────────────────────────
+export async function setupCustomerPushSubscription(phone?: string): Promise<PushSubscription | null> {
+  if (typeof window === 'undefined' || !('Notification' in window)) {
+    return null;
+  }
+
+  const permission = await Notification.requestPermission();
+  if (permission !== 'granted') return null;
+
+  const reg = await registerServiceWorker();
+  if (!reg) return null;
+
+  try {
+    let sub = await reg.pushManager.getSubscription();
+
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY) as unknown as BufferSource,
+      });
+    }
+
+    const subJson = sub.toJSON();
+    if (subJson.endpoint && subJson.keys) {
+      const { data: authData } = await supabase.auth.getUser();
+      const userId = authData?.user?.id || null;
+      const cleanPhone = phone ? String(phone).replace(/\D/g, '').slice(-10) : null;
+
+      await supabase.from('cuex_push_subscriptions').upsert(
+        {
+          endpoint: subJson.endpoint,
+          p256dh: subJson.keys.p256dh,
+          auth: subJson.keys.auth,
+          user_id: userId,
+          phone: cleanPhone,
+          role: 'customer',
+          user_agent: navigator.userAgent,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'endpoint' }
+      );
+
+      await fetch(PUSH_FUNCTION_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'subscribe',
+          subscription: subJson,
+          user_id: userId,
+          phone: cleanPhone,
+          role: 'customer',
+          user_agent: navigator.userAgent,
+        }),
+      }).catch(() => {});
+    }
+
+    return sub;
+  } catch (err) {
+    console.error('[CueX PWA] Customer push subscription failed:', err);
+    return null;
+  }
+}
+
+// ─── Send Push to a Specific Customer ──────────────────────────────────────
+export async function sendCustomerPush(payload: {
+  phone?: string;
+  user_id?: string;
+  title: string;
+  body: string;
+  url?: string;
+  tag?: string;
+}): Promise<boolean> {
+  try {
+    const res = await fetch(PUSH_FUNCTION_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...payload,
+        target: 'customer',
+      }),
+    });
+    return res.ok;
+  } catch (err) {
+    console.error('[CueX PWA] Failed to dispatch customer push:', err);
+    return false;
+  }
+}
+
 // ─── Test Background Push (Delayed so user can lock screen/close app) ──────
 export async function testBackgroundPush(delaySeconds: number = 4): Promise<void> {
   // Ensure subscribed first

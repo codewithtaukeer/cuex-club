@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import confetti from 'canvas-confetti';
-import { CheckCircle2, Clock, MessageSquare, Calendar as CalendarIcon, Phone, ArrowRight, RefreshCw, XCircle, Ticket, X } from 'lucide-react';
+import { CheckCircle2, Clock, MessageSquare, Calendar as CalendarIcon, Phone, ArrowRight, RefreshCw, XCircle, Ticket, X, Bell } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import type { CuexBooking, BookingStatus } from '../../types';
 import { formatToIST, formatDateIST, formatINR, generateBookingWhatsAppLink, generateGoogleCalendarUrl, VENUE_INFO } from '../../lib/utils';
 import { BookingInvoiceModal } from './BookingInvoiceModal';
+import { setupCustomerPushSubscription, getPushSubscriptionStatus } from '../../lib/pwa';
 
 interface BookingSuccessModalProps {
   booking: CuexBooking;
@@ -23,6 +24,16 @@ export const BookingSuccessModal: React.FC<BookingSuccessModalProps> = ({ bookin
     return Math.max(0, diff);
   });
   const [refreshing, setRefreshing] = useState(false);
+  const [reminderActive, setReminderActive] = useState(false);
+  const [enablingReminder, setEnablingReminder] = useState(false);
+
+  useEffect(() => {
+    getPushSubscriptionStatus().then(st => {
+      if (st.subscribed && st.permission === 'granted') {
+        setReminderActive(true);
+      }
+    });
+  }, []);
 
   // Countdown timer for pending confirmation hold
   useEffect(() => {
@@ -304,6 +315,42 @@ export const BookingSuccessModal: React.FC<BookingSuccessModalProps> = ({ bookin
 
           <div className="pt-2 border-t border-white/5 text-[11px] text-mutedgrey">
             <p>Reserved for: <span className="text-warmivory font-medium">{currentBooking.customer_name}</span> ({currentBooking.customer_phone})</p>
+          </div>
+        </div>
+
+        {/* Push Notification & Reminder Opt-in */}
+        <div className="mb-4 p-3.5 rounded-2xl bg-gradient-to-r from-champagne/10 via-emerald-500/10 to-champagne/10 border border-champagne/30 text-left">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-xl bg-champagne/20 text-champagne shrink-0">
+                <Bell className="w-4 h-4" />
+              </div>
+              <div>
+                <p className="text-xs font-bold text-warmivory">Get Match Reminders</p>
+                <p className="text-[10px] text-mutedgrey">Phone alerts 1 hour before start & instant confirmation</p>
+              </div>
+            </div>
+            {reminderActive ? (
+              <span className="px-2.5 py-1 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 text-[10px] font-bold uppercase tracking-wider shrink-0 flex items-center gap-1">
+                <CheckCircle2 className="w-3 h-3" /> Active
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={async () => {
+                  setEnablingReminder(true);
+                  const sub = await setupCustomerPushSubscription(currentBooking.customer_phone);
+                  setEnablingReminder(false);
+                  if (sub) {
+                    setReminderActive(true);
+                  }
+                }}
+                disabled={enablingReminder}
+                className="px-3.5 py-1.5 rounded-xl bg-champagne text-obsidian text-[11px] font-bold uppercase tracking-wider shadow-gold-glow hover:bg-warmgold shrink-0 transition-transform active:scale-95"
+              >
+                {enablingReminder ? 'Enabling...' : 'Turn On'}
+              </button>
+            )}
           </div>
         </div>
 

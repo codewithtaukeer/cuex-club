@@ -1,14 +1,14 @@
 {
-  "name": "CueX Admin",
-  "short_name": "CueX Admin",
-  "description": "CueX Owner Dashboard — manage bookings, receive instant alerts, control your venue.",
-  "start_url": "/admin-app",
+  "name": "CueX — Pool, Snooker & PS5 Lounge",
+  "short_name": "CueX",
+  "description": "Reserve Pool, Snooker and PS5 gaming slots in Prayagraj with real-time table availability and match reminders.",
+  "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "orientation": "portrait",
+  "orientation": "portrait-primary",
   "background_color": "#0B0C0B",
   "theme_color": "#0B0C0B",
-  "categories": ["productivity", "business"],
+  "categories": ["entertainment", "sports", "lifestyle"],
   "icons": [
     {
       "src": "/assets/cuex-logo.png",
@@ -25,24 +25,31 @@
   ],
   "shortcuts": [
     {
-      "name": "Pending Requests",
-      "short_name": "Pending",
-      "description": "View pending booking requests",
-      "url": "/admin-app?tab=pending",
+      "name": "Book a Game",
+      "short_name": "Book",
+      "description": "Reserve a Pool, Snooker or PS5 slot",
+      "url": "/booking",
       "icons": [{ "src": "/assets/cuex-logo.png", "sizes": "96x96" }]
     },
     {
-      "name": "Walk-in Booking",
-      "short_name": "Walk-in",
-      "description": "Create a manual walk-in booking",
-      "url": "/admin-app?tab=walkin",
+      "name": "My Reservations",
+      "short_name": "My Bookings",
+      "description": "View your passes and slot reminders",
+      "url": "/my-bookings",
       "icons": [{ "src": "/assets/cuex-logo.png", "sizes": "96x96" }]
     },
     {
-      "name": "Day-Wise Collection",
-      "short_name": "Collection",
-      "description": "View daily revenue collections",
-      "url": "/admin-app?tab=collection",
+      "name": "Live Availability",
+      "short_name": "Tables",
+      "description": "Check live table and station availability",
+      "url": "/availability",
+      "icons": [{ "src": "/assets/cuex-logo.png", "sizes": "96x96" }]
+    },
+    {
+      "name": "Admin Console",
+      "short_name": "Admin",
+      "description": "Owner portal & venue controls",
+      "url": "/admin-app",
       "icons": [{ "src": "/assets/cuex-logo.png", "sizes": "96x96" }]
     }
   ]

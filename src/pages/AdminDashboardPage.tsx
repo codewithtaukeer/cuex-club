@@ -40,7 +40,7 @@ import {
   requestNotificationPermission, 
   showBrowserNotification 
 } from '../lib/notificationSound';
-import { registerServiceWorker, setupPushSubscription } from '../lib/pwa';
+import { registerServiceWorker, setupPushSubscription, sendCustomerPush } from '../lib/pwa';
 
 function statusColour(status: string): string {
   switch (status) {
@@ -526,6 +526,17 @@ export const AdminDashboardPage: React.FC = () => {
         p_booking_id: b.id,
       });
       if (error) throw error;
+
+      // Dispatch real push notification directly to customer
+      sendCustomerPush({
+        phone: b.customer_phone,
+        user_id: b.user_id,
+        title: '🎱 CueX Booking Confirmed!',
+        body: `Your slot on ${formatDateIST(b.start_at)} at ${formatToIST(b.start_at)} is locked in! Ref: ${b.booking_reference}`,
+        url: '/my-bookings',
+        tag: `cuex-confirmed-${b.id}`,
+      }).catch(() => {});
+
       setFeedbackMsg({
         type: 'success',
         text: `Reservation ${b.booking_reference} confirmed for ${b.customer_name}! Slot is now locked.`,
@@ -547,6 +558,17 @@ export const AdminDashboardPage: React.FC = () => {
         p_reason: reason || 'Declined by venue',
       });
       if (error) throw error;
+
+      // Dispatch real push notification to customer
+      sendCustomerPush({
+        phone: b.customer_phone,
+        user_id: b.user_id,
+        title: '🎱 CueX Booking Update',
+        body: `Your booking request ${b.booking_reference} was declined (${reason || 'Slot unavailable'}). Tap to choose another slot.`,
+        url: '/booking',
+        tag: `cuex-rejected-${b.id}`,
+      }).catch(() => {});
+
       setFeedbackMsg({
         type: 'success',
         text: `Booking ${b.booking_reference} rejected. Slot is immediately freed for other players.`,

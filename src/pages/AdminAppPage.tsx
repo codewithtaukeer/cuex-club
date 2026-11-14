@@ -25,6 +25,7 @@ import {
   canInstallPwa,
   promptPwaInstall,
   isPwa,
+  sendCustomerPush,
 } from '../lib/pwa';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
@@ -274,6 +275,17 @@ export const AdminAppPage: React.FC = () => {
       const { error } = await supabase.rpc('cuex_admin_confirm_booking', { p_booking_id: b.id });
       if (error) throw error;
       showFeedback('success', `✅ ${b.booking_reference} confirmed!`);
+
+      // Send real push notification directly to this customer's phone!
+      sendCustomerPush({
+        phone: b.customer_phone,
+        user_id: b.user_id,
+        title: '🎱 CueX Booking Confirmed!',
+        body: `Your slot for ${resLabel(b.resource_id)} on ${formatDateIST(b.start_at)} at ${formatToIST(b.start_at)} is locked in! Ref: ${b.booking_reference}`,
+        url: '/my-bookings',
+        tag: `cuex-confirmed-${b.id}`,
+      }).catch(() => {});
+
       loadData();
     } catch (err: any) { showFeedback('error', err.message || 'Confirmation failed'); }
   };
@@ -287,6 +299,17 @@ export const AdminAppPage: React.FC = () => {
       });
       if (error) throw error;
       showFeedback('success', `Booking ${b.booking_reference} rejected.`);
+
+      // Notify customer of decline
+      sendCustomerPush({
+        phone: b.customer_phone,
+        user_id: b.user_id,
+        title: '🎱 CueX Booking Update',
+        body: `Your reservation request ${b.booking_reference} was declined (${reason || 'Slot unavailable'}). Tap to choose another time.`,
+        url: '/booking',
+        tag: `cuex-rejected-${b.id}`,
+      }).catch(() => {});
+
       loadData();
     } catch (err: any) { showFeedback('error', err.message || 'Rejection failed'); }
   };
@@ -820,7 +843,7 @@ export const AdminAppPage: React.FC = () => {
 
   // ─── Tab Screens ──────────────────────────────────────────────────────────
 
-  const HomeTab = () => (
+  const renderHomeTab = () => (
     <div className="space-y-4">
       {/* Stats grid */}
       <div className="grid grid-cols-2 gap-3">
@@ -937,7 +960,7 @@ export const AdminAppPage: React.FC = () => {
     </div>
   );
 
-  const PendingTab = () => (
+  const renderPendingTab = () => (
     <div className="space-y-4">
       {pending.length === 0 ? (
         <div className="py-16 flex flex-col items-center gap-3 text-center">
@@ -953,7 +976,7 @@ export const AdminAppPage: React.FC = () => {
     </div>
   );
 
-  const BookingsTab = () => {
+  const renderBookingsTab = () => {
     const freeSlotsCount = scheduleSlots.filter(s => s.slot_status === 'available').length;
     const bookedSlotsCount = scheduleSlots.filter(s => s.slot_status === 'booked' || s.slot_status === 'held').length;
     const blockedSlotsCount = scheduleSlots.filter(s => s.slot_status === 'blocked' || s.slot_status === 'closed').length;
@@ -1292,7 +1315,7 @@ export const AdminAppPage: React.FC = () => {
     );
   };
 
-  const WalkInTab = () => (
+  const renderWalkInTab = () => (
     <form onSubmit={handleManualBook} className="space-y-4">
       <div className="p-4 rounded-2xl bg-champagne/5 border border-champagne/20">
         <p className="text-xs text-champagne font-semibold">Walk-in booking is instantly confirmed — zero collision guarantee.</p>
@@ -1317,7 +1340,17 @@ export const AdminAppPage: React.FC = () => {
         </div>
         <div>
           <label className={labelCls}>Phone</label>
-          <input value={manualPhone} onChange={e => setManualPhone(e.target.value)} className={inputCls} placeholder="10-digit" required />
+          <input
+            type="tel"
+            inputMode="tel"
+            autoComplete="tel"
+            maxLength={10}
+            value={manualPhone}
+            onChange={e => setManualPhone(e.target.value.replace(/\D/g, ''))}
+            className={inputCls}
+            placeholder="10-digit number"
+            required
+          />
         </div>
       </div>
 
@@ -1375,7 +1408,7 @@ export const AdminAppPage: React.FC = () => {
     </form>
   );
 
-  const BlockTab = () => (
+  const renderBlockTab = () => (
     <div className="space-y-5">
       <form onSubmit={handleCreateBlock} className="space-y-4 p-4 rounded-2xl bg-white/3 border border-white/8">
         <p className="text-sm font-bold text-warmivory">Schedule Table / Club Maintenance</p>
@@ -1438,7 +1471,7 @@ export const AdminAppPage: React.FC = () => {
     </div>
   );
 
-  const CollectionTab = () => (
+  const renderCollectionTab = () => (
     <div className="space-y-4">
       {/* Header & Export */}
       <div className="flex items-center justify-between gap-2">
@@ -1666,7 +1699,7 @@ export const AdminAppPage: React.FC = () => {
     </div>
   );
 
-  const ControlsTab = () => (
+  const renderControlsTab = () => (
     <div className="space-y-4">
       {/* Sub-tab selector */}
       <div className="grid grid-cols-4 gap-1.5 p-1 rounded-2xl bg-white/5 border border-white/10">
@@ -1949,14 +1982,14 @@ export const AdminAppPage: React.FC = () => {
       )}
 
       {/* SUB-TAB 3: WALK-IN BOOKING */}
-      {controlsSubTab === 'walkin' && <WalkInTab />}
+      {controlsSubTab === 'walkin' && renderWalkInTab()}
 
       {/* SUB-TAB 4: MAINTENANCE BLOCK */}
-      {controlsSubTab === 'maintenance' && <BlockTab />}
+      {controlsSubTab === 'maintenance' && renderBlockTab()}
     </div>
   );
 
-  const SettingsTab = () => (
+  const renderSettingsTab = () => (
     <div className="space-y-4">
       {/* Background Push Notifications (When App Is Closed) */}
       <div className="p-4 rounded-2xl bg-gradient-to-br from-cuexemerald/15 via-white/5 to-white/2 border border-cuexemerald/30 space-y-3 shadow-lg">
@@ -2256,12 +2289,12 @@ export const AdminAppPage: React.FC = () => {
 
       {/* Main Content */}
       <main className="flex-1 px-4 py-4 pb-28 overflow-y-auto">
-        {tab === 'home' && <HomeTab />}
-        {tab === 'pending' && <PendingTab />}
-        {tab === 'bookings' && <BookingsTab />}
-        {tab === 'collection' && <CollectionTab />}
-        {tab === 'controls' && <ControlsTab />}
-        {tab === 'settings' && <SettingsTab />}
+        {tab === 'home' && renderHomeTab()}
+        {tab === 'pending' && renderPendingTab()}
+        {tab === 'bookings' && renderBookingsTab()}
+        {tab === 'collection' && renderCollectionTab()}
+        {tab === 'controls' && renderControlsTab()}
+        {tab === 'settings' && renderSettingsTab()}
       </main>
 
       {/* Bottom Navigation Bar */}

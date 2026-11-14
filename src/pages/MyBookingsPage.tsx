@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Calendar, MessageSquare, ArrowRight, Phone, HelpCircle, Ticket } from 'lucide-react';
+import { Calendar, MessageSquare, ArrowRight, Phone, HelpCircle, Ticket, Bell, CheckCircle2, Smartphone } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import type { CuexBooking } from '../types';
 import { formatToIST, formatDateIST, formatINR, generateGoogleCalendarUrl, VENUE_INFO } from '../lib/utils';
 import { BookingInvoiceModal } from '../components/booking/BookingInvoiceModal';
+import { setupCustomerPushSubscription, getPushSubscriptionStatus, promptPwaInstall, isPwa } from '../lib/pwa';
 
 export const MyBookingsPage: React.FC = () => {
   const { user, loading: authLoading } = useAuth();
@@ -20,6 +21,16 @@ export const MyBookingsPage: React.FC = () => {
       return '';
     }
   });
+  const [pushSubscribed, setPushSubscribed] = useState(false);
+  const [enablingPush, setEnablingPush] = useState(false);
+
+  useEffect(() => {
+    getPushSubscriptionStatus().then(st => {
+      if (st.subscribed && st.permission === 'granted') {
+        setPushSubscribed(true);
+      }
+    });
+  }, []);
 
   const fetchBookings = async (phoneToQuery?: string, refToQuery?: string) => {
     setLoading(true);
@@ -96,6 +107,69 @@ export const MyBookingsPage: React.FC = () => {
             <span>Book New Slot</span>
             <ArrowRight className="w-4 h-4" />
           </Link>
+        </div>
+
+        {/* Customer App & Reminders Bar */}
+        <div className="mb-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* Match Reminders */}
+          <div className="p-4 rounded-2xl bg-charcoal/80 border border-white/10 flex items-center justify-between gap-3 shadow-lg">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-xl bg-champagne/15 text-champagne shrink-0">
+                <Bell className="w-4 h-4" />
+              </div>
+              <div>
+                <p className="text-xs font-bold text-warmivory">Match Reminders</p>
+                <p className="text-[10px] text-mutedgrey">Phone alerts 1 hour before your game</p>
+              </div>
+            </div>
+            {pushSubscribed ? (
+              <span className="px-2.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold uppercase tracking-wider shrink-0 flex items-center gap-1">
+                <CheckCircle2 className="w-3 h-3" /> Active
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={async () => {
+                  setEnablingPush(true);
+                  const sub = await setupCustomerPushSubscription(phoneLookup);
+                  setEnablingPush(false);
+                  if (sub) setPushSubscribed(true);
+                }}
+                disabled={enablingPush}
+                className="px-3 py-1.5 rounded-xl bg-champagne text-obsidian text-[11px] font-bold uppercase tracking-wider hover:bg-warmgold shrink-0 transition-transform active:scale-95 shadow-gold-glow"
+              >
+                {enablingPush ? 'Enabling...' : 'Turn On'}
+              </button>
+            )}
+          </div>
+
+          {/* Install App on Phone */}
+          <div className="p-4 rounded-2xl bg-charcoal/80 border border-white/10 flex items-center justify-between gap-3 shadow-lg">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-xl bg-blue-500/15 text-blue-400 shrink-0">
+                <Smartphone className="w-4 h-4" />
+              </div>
+              <div>
+                <p className="text-xs font-bold text-warmivory">Install CueX App</p>
+                <p className="text-[10px] text-mutedgrey">Direct home screen access & instant bookings</p>
+              </div>
+            </div>
+            {isPwa() ? (
+              <span className="px-2.5 py-1 rounded-full bg-blue-500/15 border border-blue-500/30 text-blue-400 text-[10px] font-bold uppercase tracking-wider shrink-0">
+                Installed
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={async () => {
+                  await promptPwaInstall();
+                }}
+                className="px-3 py-1.5 rounded-xl bg-blue-500/20 border border-blue-500/40 text-blue-300 text-[11px] font-bold uppercase tracking-wider hover:bg-blue-500/30 shrink-0 transition-transform active:scale-95"
+              >
+                Install
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Guest Phone Lookup Bar if not logged in */}
