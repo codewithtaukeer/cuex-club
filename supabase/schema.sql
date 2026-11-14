@@ -1044,3 +1044,70 @@ END $$;
 --   '* * * * *',
 --   'SELECT public.cuex_cleanup_expired_bookings();'
 -- );
+
+-- ------------------------------------------------------------------------------
+-- 8. WEB PUSH NOTIFICATIONS & REAL-TIME ALERTS
+-- ------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.cuex_push_subscriptions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+  phone text,
+  role text DEFAULT 'admin', -- 'admin' | 'customer'
+  endpoint text NOT NULL UNIQUE,
+  p256dh text NOT NULL,
+  auth text NOT NULL,
+  user_agent text,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_cuex_push_phone ON public.cuex_push_subscriptions(phone);
+CREATE INDEX IF NOT EXISTS idx_cuex_push_role ON public.cuex_push_subscriptions(role);
+
+ALTER TABLE public.cuex_push_subscriptions ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow push subscriptions upsert" ON public.cuex_push_subscriptions;
+CREATE POLICY "Allow push subscriptions upsert"
+  ON public.cuex_push_subscriptions
+  FOR ALL
+  USING (true)
+  WITH CHECK (true);
+
+-- Enable pg_net for asynchronous database webhooks
+CREATE EXTENSION IF NOT EXISTS pg_net SCHEMA extensions;
+
+-- Automated trigger function to notify admin on new booking requests
+CREATE OR REPLACE FUNCTION public.cuex_trigger_notify_admin_booking()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_res_name text;
+BEGIN
+  IF NEW.status IN ('pending_confirmation', 'pending') THEN
+    SELECT name INTO v_res_name FROM public.cuex_resources WHERE id = NEW.resource_id;
+
+    PERFORM net.http_post(
+      url := 'https://vetyyyemzhqinqoeqakz.supabase.co/functions/v1/notify-admin-booking',
+      headers := '{"Content-Type": "application/json"}'::jsonb,
+      body := json_build_object(
+        'title', '🎱 New CueX Booking Request!',
+        'body', NEW.customer_name || ' (' || NEW.customer_phone || ') requested ' || COALESCE(v_res_name, NEW.resource_id) || ' for ₹' || NEW.total_amount,
+        'url', '/admin-app?tab=pending',
+        'tag', 'cuex-booking-' || NEW.id::text
+      )::jsonb
+    );
+  END IF;
+  RETURN NEW;
+EXCEPTION WHEN OTHERS THEN
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS on_cuex_booking_inserted_notify ON public.cuex_bookings;
+CREATE TRIGGER on_cuex_booking_inserted_notify
+  AFTER INSERT ON public.cuex_bookings
+  FOR EACH ROW
+  EXECUTE FUNCTION public.cuex_trigger_notify_admin_booking();
+
