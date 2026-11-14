@@ -120,17 +120,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         },
       });
 
-      if (!error && data.user) {
-        // Upsert to profiles table
-        await supabase.from('profiles').upsert({
-          id: data.user.id,
-          full_name: fullName,
-          email: email,
-          phone: phone,
-          role: 'member',
-        });
-      }
-
       return { error: error ? new Error(error.message) : null, user: data.user, session: data.session };
     } catch (err: any) {
       return { error: err, user: null, session: null };

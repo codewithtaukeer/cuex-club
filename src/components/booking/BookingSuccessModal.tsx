@@ -35,6 +35,47 @@ export const BookingSuccessModal: React.FC<BookingSuccessModalProps> = ({ bookin
     });
   }, []);
 
+  // Helper: query server status via secure guest lookup
+  const verifyServerStatus = async () => {
+    try {
+      const { data, error } = await supabase.rpc('cuex_lookup_guest_bookings', {
+        p_phone: currentBooking.customer_phone,
+        p_booking_ref: currentBooking.booking_reference,
+      });
+
+      if (!error && Array.isArray(data) && data.length > 0) {
+        const latest = data[0] as CuexBooking;
+        if (latest.status && latest.status !== status) {
+          setStatus(latest.status);
+          setCurrentBooking((prev) => ({ ...prev, ...latest }));
+          if (latest.status === 'confirmed') {
+            confetti({
+              particleCount: 120,
+              spread: 80,
+              origin: { y: 0.6 },
+              colors: ['#D6A754', '#F4C979', '#08784D', '#ffffff'],
+            });
+          }
+        }
+        return latest.status;
+      }
+    } catch {
+      // ignore network errors during background check
+    }
+    return null;
+  };
+
+  // Poll server status every 8 seconds while pending
+  useEffect(() => {
+    if (status !== 'pending_confirmation' && status !== 'pending') return;
+
+    const pollInterval = setInterval(() => {
+      verifyServerStatus();
+    }, 8000);
+
+    return () => clearInterval(pollInterval);
+  }, [status, currentBooking.customer_phone, currentBooking.booking_reference]);
+
   // Countdown timer for pending confirmation hold
   useEffect(() => {
     if (status !== 'pending_confirmation' && status !== 'pending') return;
@@ -43,7 +84,12 @@ export const BookingSuccessModal: React.FC<BookingSuccessModalProps> = ({ bookin
       setTimeLeft((prev) => {
         if (prev <= 1) {
           clearInterval(interval);
-          setStatus('expired');
+          // Verify with server before showing Expired
+          verifyServerStatus().then((serverStatus) => {
+            if (serverStatus !== 'confirmed') {
+              setStatus('expired');
+            }
+          });
           return 0;
         }
         return prev - 1;
@@ -51,7 +97,7 @@ export const BookingSuccessModal: React.FC<BookingSuccessModalProps> = ({ bookin
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [status]);
+  }, [status, currentBooking.customer_phone, currentBooking.booking_reference]);
 
   // Escape key closes modal (Accessibility)
   useEffect(() => {
@@ -104,26 +150,14 @@ export const BookingSuccessModal: React.FC<BookingSuccessModalProps> = ({ bookin
   const handleManualRefresh = async () => {
     setRefreshing(true);
     try {
-      const { data } = await supabase
-        .from('cuex_bookings')
-        .select('*')
-        .eq('id', currentBooking.id)
-        .single();
-
-      if (data) {
-        const b = data as CuexBooking;
-        setCurrentBooking(b);
-        setStatus(b.status);
-        if (b.status === 'confirmed') {
-          confetti({
-            particleCount: 100,
-            spread: 70,
-            origin: { y: 0.6 },
-          });
-        }
+      const serverStatus = await verifyServerStatus();
+      if (serverStatus === 'confirmed') {
+        confetti({
+          particleCount: 100,
+          spread: 70,
+          origin: { y: 0.6 },
+        });
       }
-    } catch (err) {
-      console.error(err);
     } finally {
       setRefreshing(false);
     }

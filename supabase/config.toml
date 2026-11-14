@@ -1,0 +1,2 @@
+[functions.notify-admin-booking]
+verify_jwt = false

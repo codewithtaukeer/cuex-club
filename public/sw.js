@@ -1,8 +1,8 @@
 // CueX Service Worker
-// Version: cuex-pwa-v4
+// Version: cuex-pwa-v5
 // Handles: Push Notifications, Rock-Solid SPA Navigation Fallback, Background Sync
 
-const CACHE_NAME = 'cuex-pwa-v4';
+const CACHE_NAME = 'cuex-pwa-v5';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -135,12 +135,13 @@ self.addEventListener('fetch', (event) => {
 // ─── Push Notification Handler ─────────────────────────────────────────────
 self.addEventListener('push', (event) => {
   let data = {
-    title: '🎱 New CueX Booking Request!',
-    body: 'A customer has requested a slot. Tap to review.',
+    title: '🎱 CueX Notification',
+    body: 'You have a new update from CueX.',
     icon: '/assets/cuex-logo.png',
     badge: '/assets/cuex-logo.png',
-    tag: 'cuex-booking',
-    url: '/admin-app?tab=pending',
+    tag: 'cuex-notification',
+    url: '/my-bookings',
+    role: 'customer',
   };
 
   if (event.data) {
@@ -149,22 +150,33 @@ self.addEventListener('push', (event) => {
     } catch {}
   }
 
+  // Safe same-site link validation (must start with single / and not //)
+  let safeUrl = '/my-bookings';
+  if (typeof data.url === 'string' && data.url.startsWith('/') && !data.url.startsWith('//')) {
+    safeUrl = data.url;
+  }
+
+  const isAdminNotification = data.role === 'admin' || safeUrl.includes('/admin');
+
   const options = {
     body: data.body,
     icon: data.icon || '/assets/cuex-logo.png',
     badge: data.badge || '/assets/cuex-logo.png',
-    tag: data.tag || 'cuex-booking',
+    tag: data.tag || 'cuex-notification',
     renotify: true,
-    requireInteraction: true,
+    requireInteraction: isAdminNotification,
     silent: false,
     vibrate: [300, 150, 300, 150, 500],
-    sound: '/assets/notification.wav',
-    actions: [
+    data: { url: safeUrl, role: data.role || (isAdminNotification ? 'admin' : 'customer') },
+  };
+
+  // Action buttons appear only on admin notifications
+  if (isAdminNotification) {
+    options.actions = [
       { action: 'view', title: '🎱 View & Confirm' },
       { action: 'dismiss', title: '✕ Dismiss' },
-    ],
-    data: { url: data.url || '/admin-app?tab=pending' },
-  };
+    ];
+  }
 
   event.waitUntil(self.registration.showNotification(data.title, options));
 });
@@ -173,15 +185,18 @@ self.addEventListener('push', (event) => {
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
 
-  const targetUrl = (event.notification.data && event.notification.data.url) || '/admin-app?tab=pending';
+  let targetUrl = (event.notification.data && event.notification.data.url) || '/';
+  if (typeof targetUrl !== 'string' || !targetUrl.startsWith('/') || targetUrl.startsWith('//')) {
+    targetUrl = '/';
+  }
 
   if (event.action === 'dismiss') return;
 
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
-      // Focus existing window if open
+      // Focus existing open CueX window
       for (const client of clientList) {
-        if ((client.url.includes('/admin-app') || client.url.includes('/admin')) && 'focus' in client) {
+        if ('focus' in client) {
           if ('navigate' in client) {
             client.navigate(targetUrl);
           }

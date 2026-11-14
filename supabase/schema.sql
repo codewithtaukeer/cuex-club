@@ -109,6 +109,7 @@ CREATE TABLE IF NOT EXISTS public.cuex_bookings (
   rejection_reason text,
   expires_at timestamptz,
   confirmed_at timestamptz,
+  reminder_sent_at timestamptz DEFAULT NULL,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now(),
   CONSTRAINT cuex_booking_time_order CHECK (end_at > start_at)
@@ -139,10 +140,10 @@ CREATE INDEX IF NOT EXISTS idx_cuex_bookings_status_expires
 -- 2.8 Contact Form Enquiries
 CREATE TABLE IF NOT EXISTS public.cuex_contact_messages (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
-  name text NOT NULL,
-  phone text NOT NULL,
-  email text,
-  message text NOT NULL,
+  name varchar(120) NOT NULL,
+  phone varchar(20) NOT NULL,
+  email varchar(254),
+  message varchar(2000) NOT NULL,
   created_at timestamptz DEFAULT now()
 );
 
@@ -150,16 +151,16 @@ CREATE TABLE IF NOT EXISTS public.cuex_contact_messages (
 -- 3. INITIAL SEED DATA
 -- ------------------------------------------------------------------------------
 
--- Seed Resources
+-- Seed Resources (DO UPDATE only sets name/description — preserves admin-edited pricing)
 INSERT INTO public.cuex_resources (id, name, category, description, hourly_rate, is_active, pricing_details)
 VALUES 
   ('pool', 'English Pool Table', 'Billiards', '60-minute standard or 30-minute quick match slots on high-precision green baize.', 120, true, '{"hourly": 120, "match": 40, "per_game": 40}'::jsonb),
   ('snooker', 'Championship Snooker Table', 'Snooker', 'Tournament-standard snooker table with overhead directional lighting.', 360, true, '{"hourly": 360, "match": 120, "frame": 120}'::jsonb),
-  ('ps5', 'PS5 Gaming Station', 'Console Gaming', 'Ultra-HD gaming station with DualSense wireless controllers and next-gen titles.', 149, true, '{"single_player": 149, "two_players": 249}'::jsonb)
+  ('ps5', 'PS5 Gaming Station', 'Console Gaming', 'Ultra-HD gaming station with DualSense wireless controllers and next-gen titles.', 149, true, '{"single_player": {"60": 149, "120": 249}, "two_player": {"60": 249, "120": 349}}'::jsonb)
 ON CONFLICT (id) DO UPDATE SET
-  name = EXCLUDED.name,
-  hourly_rate = EXCLUDED.hourly_rate,
-  pricing_details = EXCLUDED.pricing_details;
+  name        = EXCLUDED.name,
+  description = EXCLUDED.description,
+  category    = EXCLUDED.category;
 
 -- Seed Operating Hours (8:00 AM - 3:00 AM Late Night for all 7 days)
 INSERT INTO public.cuex_opening_hours (day_of_week, is_closed, open_time, close_time)
@@ -199,6 +200,7 @@ RETURNS boolean
 LANGUAGE sql
 SECURITY DEFINER
 STABLE
+SET search_path = public
 AS $$
   SELECT EXISTS (
     SELECT 1 FROM public.cuex_admins WHERE id = p_user_id
@@ -217,7 +219,16 @@ CREATE POLICY "Users view own profile or admins" ON public.profiles
 
 DROP POLICY IF EXISTS "Users update own profile" ON public.profiles;
 CREATE POLICY "Users update own profile" ON public.profiles
-  FOR UPDATE USING (id = auth.uid()) WITH CHECK (id = auth.uid());
+  FOR UPDATE USING (id = auth.uid())
+  WITH CHECK (
+    id = auth.uid()
+    AND role = (SELECT role FROM public.profiles WHERE id = auth.uid())
+  );
+
+-- Allow service role to insert new profiles (via trigger)
+DROP POLICY IF EXISTS "Service role can insert profiles" ON public.profiles;
+CREATE POLICY "Service role can insert profiles" ON public.profiles
+  FOR INSERT WITH CHECK (true);
 
 -- RLS: cuex_resources (Public read, admin write)
 DROP POLICY IF EXISTS "Public can view active resources" ON public.cuex_resources;
@@ -262,9 +273,8 @@ CREATE POLICY "Users and admins can view bookings" ON public.cuex_bookings
   FOR SELECT USING ((auth.uid() = user_id) OR public.cuex_is_admin());
 
 -- Users can insert their own bookings (guests allowed via RPC)
-DROP POLICY IF EXISTS "Users can insert own bookings" ON public.cuex_bookings;
-CREATE POLICY "Users can insert own bookings" ON public.cuex_bookings
-  FOR INSERT WITH CHECK ((user_id = auth.uid()) OR public.cuex_is_admin());
+-- REMOVED: direct INSERT removed — all bookings go through cuex_book_slot RPC (SECURITY DEFINER)
+-- Only admins retain a managed delete path.
 
 -- Strictly Admins can UPDATE bookings (cancellations/approvals)
 DROP POLICY IF EXISTS "Only admins can update bookings" ON public.cuex_bookings;
@@ -345,12 +355,11 @@ $$;
 
 -- 5.2 Cleanup Expired Pending Bookings
 CREATE OR REPLACE FUNCTION public.cuex_cleanup_expired_bookings()
-RETURNS integer
+RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public
 AS $$
-DECLARE
-  v_count integer;
 BEGIN
   UPDATE public.cuex_bookings
   SET status = 'expired',
@@ -358,11 +367,11 @@ BEGIN
   WHERE status IN ('pending_confirmation', 'pending')
     AND expires_at IS NOT NULL
     AND expires_at < now();
-
-  GET DIAGNOSTICS v_count = ROW_COUNT;
-  RETURN v_count;
 END;
 $$;
+
+REVOKE ALL ON FUNCTION public.cuex_cleanup_expired_bookings() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.cuex_cleanup_expired_bookings() TO service_role;
 
 -- 5.3 Fetch Availability Slots (8:00 AM to 3:00 AM next day)
 CREATE OR REPLACE FUNCTION public.cuex_get_resource_availability(
@@ -671,25 +680,52 @@ CREATE OR REPLACE FUNCTION public.cuex_admin_confirm_booking(p_booking_id uuid)
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public
 AS $$
 DECLARE
   v_booking public.cuex_bookings%ROWTYPE;
+  v_existing public.cuex_bookings%ROWTYPE;
 BEGIN
   IF NOT public.cuex_is_admin() THEN
     RAISE EXCEPTION 'Access denied: Admin privileges required.';
   END IF;
 
-  UPDATE public.cuex_bookings
-  SET status = 'confirmed',
-      confirmed_at = now(),
-      expires_at = NULL,
-      updated_at = now()
-  WHERE id = p_booking_id
-  RETURNING * INTO v_booking;
+  SELECT * INTO v_existing FROM public.cuex_bookings WHERE id = p_booking_id;
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Booking not found.';
   END IF;
+
+  -- Already confirmed – idempotent, return as-is
+  IF v_existing.status = 'confirmed' THEN
+    RETURN row_to_json(v_existing)::jsonb;
+  END IF;
+
+  IF v_existing.status NOT IN ('pending_confirmation', 'pending') THEN
+    RAISE EXCEPTION 'Cannot confirm a booking in status "%". Only pending bookings can be confirmed.', v_existing.status;
+  END IF;
+
+  IF v_existing.start_at < (now() - interval '5 minutes') THEN
+    RAISE EXCEPTION 'Cannot confirm a booking whose start time has already passed.';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM public.cuex_bookings
+    WHERE resource_id = v_existing.resource_id
+      AND status = 'confirmed'
+      AND id <> p_booking_id
+      AND tstzrange(start_at, end_at) && tstzrange(v_existing.start_at, v_existing.end_at)
+  ) THEN
+    RAISE EXCEPTION 'Another booking was confirmed for this slot while this one was pending. Please reopen the slot.';
+  END IF;
+
+  UPDATE public.cuex_bookings
+  SET status       = 'confirmed',
+      confirmed_at = now(),
+      expires_at   = NULL,
+      updated_at   = now()
+  WHERE id = p_booking_id
+  RETURNING * INTO v_booking;
 
   RETURN row_to_json(v_booking)::jsonb;
 END;
@@ -729,6 +765,7 @@ CREATE OR REPLACE FUNCTION public.cuex_admin_extend_hold(p_booking_id uuid, p_ad
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public
 AS $$
 DECLARE
   v_booking public.cuex_bookings%ROWTYPE;
@@ -737,15 +774,28 @@ BEGIN
     RAISE EXCEPTION 'Access denied: Admin privileges required.';
   END IF;
 
+  -- Allow reviving a recently-expired hold (within 5 minutes of expiry).
+  -- Always compute new expiry from NOW() so time is never added to an old timestamp.
   UPDATE public.cuex_bookings
-  SET expires_at = COALESCE(expires_at, now()) + (p_additional_minutes || ' minutes')::interval,
+  SET expires_at = now() + (p_additional_minutes || ' minutes')::interval,
+      status     = CASE
+                     WHEN status = 'expired' THEN 'pending_confirmation'
+                     ELSE status
+                   END,
       updated_at = now()
   WHERE id = p_booking_id
-    AND status IN ('pending_confirmation', 'pending')
+    AND (
+      status IN ('pending_confirmation', 'pending')
+      OR (
+        status = 'expired'
+        AND expires_at IS NOT NULL
+        AND expires_at > (now() - interval '5 minutes')
+      )
+    )
   RETURNING * INTO v_booking;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'Booking not found or not currently pending.';
+    RAISE EXCEPTION 'Booking not found, already confirmed/rejected, or expired more than 5 minutes ago.';
   END IF;
 
   RETURN row_to_json(v_booking)::jsonb;
@@ -844,12 +894,15 @@ BEGIN
   v_clean_phone := regexp_replace(p_customer_phone, '\D', '', 'g');
   IF length(v_clean_phone) = 12 AND substring(v_clean_phone FROM 1 FOR 2) = '91' THEN
     v_clean_phone := substring(v_clean_phone FROM 3);
+  ELSIF length(v_clean_phone) = 11 AND substring(v_clean_phone FROM 1 FOR 1) = '0' THEN
+    v_clean_phone := substring(v_clean_phone FROM 2);
   END IF;
-  IF length(v_clean_phone) = 10 THEN
-    v_clean_phone := '+91' || v_clean_phone;
-  ELSE
-    v_clean_phone := '+916394149768';
+
+  IF length(v_clean_phone) <> 10 OR substring(v_clean_phone FROM 1 FOR 1) NOT IN ('6','7','8','9') THEN
+    RAISE EXCEPTION 'Please enter a valid 10-digit Indian mobile number for the walk-in customer.';
   END IF;
+
+  v_clean_phone := '+91' || v_clean_phone;
 
   v_end_at := p_start_at + (p_duration_minutes || ' minutes')::interval;
 
@@ -1035,6 +1088,39 @@ BEGIN
 END $$;
 
 -- ------------------------------------------------------------------------------
+-- 6b. PROFILE AUTO-CREATION TRIGGER (creates profiles row on sign-up)
+-- ------------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.cuex_handle_new_user()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  INSERT INTO public.profiles (id, full_name, email, phone, role)
+  VALUES (
+    NEW.id,
+    COALESCE(NEW.raw_user_meta_data->>'full_name', split_part(NEW.email, '@', 1)),
+    NEW.email,
+    COALESCE(NEW.raw_user_meta_data->>'phone', NULL),
+    'member'
+  )
+  ON CONFLICT (id) DO UPDATE SET
+    full_name  = COALESCE(EXCLUDED.full_name, public.profiles.full_name),
+    email      = COALESCE(EXCLUDED.email,     public.profiles.email),
+    phone      = COALESCE(EXCLUDED.phone,     public.profiles.phone),
+    updated_at = now();
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS on_auth_user_created_profile ON auth.users;
+CREATE TRIGGER on_auth_user_created_profile
+  AFTER INSERT ON auth.users
+  FOR EACH ROW
+  EXECUTE FUNCTION public.cuex_handle_new_user();
+
+-- ------------------------------------------------------------------------------
 -- 7. SCHEDULED EXPIRY MAINTENANCE (pg_cron setup)
 -- ------------------------------------------------------------------------------
 -- To enable continuous automated expiry cleanup every minute in Supabase:
@@ -1064,14 +1150,13 @@ CREATE TABLE IF NOT EXISTS public.cuex_push_subscriptions (
 CREATE INDEX IF NOT EXISTS idx_cuex_push_phone ON public.cuex_push_subscriptions(phone);
 CREATE INDEX IF NOT EXISTS idx_cuex_push_role ON public.cuex_push_subscriptions(role);
 
+-- RLS: cuex_push_subscriptions (locked — only edge function's service role key may access)
 ALTER TABLE public.cuex_push_subscriptions ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Allow push subscriptions upsert" ON public.cuex_push_subscriptions;
-CREATE POLICY "Allow push subscriptions upsert"
-  ON public.cuex_push_subscriptions
-  FOR ALL
-  USING (true)
-  WITH CHECK (true);
+DROP POLICY IF EXISTS "No direct client access to push subscriptions" ON public.cuex_push_subscriptions;
+CREATE POLICY "No direct client access to push subscriptions" ON public.cuex_push_subscriptions
+  FOR ALL USING (false) WITH CHECK (false);
 
 -- Enable pg_net for asynchronous database webhooks
 CREATE EXTENSION IF NOT EXISTS pg_net SCHEMA extensions;

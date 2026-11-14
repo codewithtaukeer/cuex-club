@@ -584,7 +584,7 @@ export const AdminDashboardPage: React.FC = () => {
     try {
       const { error } = await supabase.rpc('cuex_admin_extend_hold', {
         p_booking_id: b.id,
-        p_extra_minutes: 15,
+        p_additional_minutes: 15,
       });
       if (error) throw error;
       setFeedbackMsg({
@@ -679,6 +679,12 @@ export const AdminDashboardPage: React.FC = () => {
     e.preventDefault();
     if (!manualName.trim() || !manualPhone.trim() || !manualDate || !manualTime) {
       setFeedbackMsg({ type: 'error', text: 'Please fill in all required manual reservation fields.' });
+      return;
+    }
+
+    const cleanDigits = manualPhone.replace(/\D/g, '').slice(-10);
+    if (cleanDigits.length !== 10) {
+      setFeedbackMsg({ type: 'error', text: 'Please enter a valid 10-digit mobile number.' });
       return;
     }
 

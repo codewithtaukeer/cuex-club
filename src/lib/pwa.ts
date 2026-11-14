@@ -2,18 +2,19 @@
  * CueX PWA Manager
  * - Registers the service worker
  * - Handles Web Push subscription (VAPID)
- * - Persists admin subscriptions in Supabase
+ * - Persists subscriptions exclusively via secured Edge Function
  * - Triggers background notifications even when app/browser is completely closed
  */
 import { supabase } from './supabase';
 
-// VAPID public key with fallback to CueX production key
+const SUPABASE_URL =
+  import.meta.env.VITE_SUPABASE_URL || 'https://vetyyyemzhqinqoeqakz.supabase.co';
+
 export const VAPID_PUBLIC_KEY =
   import.meta.env.VITE_VAPID_PUBLIC_KEY ||
   'BETjBu9ielhfbIVwiiX-4KrxcxkfqhNPMDSeBEGUsytXrurVANe91AApv4eNLMFKYEb1hnnEhoz9oBfU5ZfTF5k';
 
-const PUSH_FUNCTION_URL =
-  'https://vetyyyemzhqinqoeqakz.supabase.co/functions/v1/notify-admin-booking';
+const PUSH_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/notify-admin-booking`;
 
 let swRegistration: ServiceWorkerRegistration | null = null;
 
@@ -27,7 +28,6 @@ export async function registerServiceWorker(): Promise<ServiceWorkerRegistration
   try {
     const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
     swRegistration = reg;
-    console.info('[CueX PWA] Service worker registered:', reg.scope);
     return reg;
   } catch (err) {
     console.error('[CueX PWA] Service worker registration failed:', err);
@@ -43,49 +43,81 @@ export async function getSwRegistration(): Promise<ServiceWorkerRegistration | n
   return swRegistration;
 }
 
-// ─── Persist Push Subscription to Supabase ─────────────────────────────────
-async function saveSubscriptionToBackend(sub: PushSubscription): Promise<boolean> {
+// ─── Get or Renew Subscription (handles key rotation) ─────────────────────
+async function getOrRenewSubscription(reg: ServiceWorkerRegistration): Promise<PushSubscription | null> {
+  let sub = await reg.pushManager.getSubscription();
+  if (sub) {
+    try {
+      const currentKeyArray = urlBase64ToUint8Array(VAPID_PUBLIC_KEY);
+      const subKey = sub.options.applicationServerKey;
+      let keyMatches = false;
+      if (subKey) {
+        const subKeyBytes = new Uint8Array(subKey);
+        if (subKeyBytes.length === currentKeyArray.length) {
+          keyMatches = subKeyBytes.every((b, i) => b === currentKeyArray[i]);
+        }
+      }
+      if (!keyMatches) {
+        console.info('[CueX PWA] VAPID key mismatch; renewing push subscription...');
+        await sub.unsubscribe().catch(() => {});
+        sub = null;
+      }
+    } catch {
+      sub = null;
+    }
+  }
+
+  if (!sub) {
+    sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY) as unknown as BufferSource,
+    });
+    console.info('[CueX PWA] Push subscription established:', sub.endpoint);
+  }
+
+  return sub;
+}
+
+// ─── Persist Push Subscription via Secured Edge Function ──────────────────
+async function saveSubscriptionToBackend(
+  sub: PushSubscription,
+  role: 'admin' | 'customer' = 'admin',
+  phone?: string | null
+): Promise<boolean> {
   try {
     const subJson = sub.toJSON();
     if (!subJson.endpoint || !subJson.keys) return false;
 
-    const { data: authData } = await supabase.auth.getUser();
-    const userId = authData?.user?.id || null;
+    const { data: { session } } = await supabase.auth.getSession();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (session?.access_token) {
+      headers['Authorization'] = `Bearer ${session.access_token}`;
+    }
 
-    // 1. Direct DB upsert
-    await supabase.from('cuex_push_subscriptions').upsert(
-      {
-        endpoint: subJson.endpoint,
-        p256dh: subJson.keys.p256dh,
-        auth: subJson.keys.auth,
-        user_id: userId,
-        user_agent: navigator.userAgent,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'endpoint' }
-    );
+    const cleanPhone = phone ? String(phone).replace(/\D/g, '').slice(-10) : null;
 
-    // 2. Also notify Edge Function
-    await fetch(PUSH_FUNCTION_URL, {
+    const res = await fetch(PUSH_FUNCTION_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         action: 'subscribe',
         subscription: subJson,
-        user_id: userId,
+        phone: cleanPhone,
+        role,
         user_agent: navigator.userAgent,
       }),
-    }).catch(() => {});
+    });
 
-    console.info('[CueX PWA] Push subscription saved to Supabase');
-    return true;
+    return res.ok;
   } catch (err) {
-    console.warn('[CueX PWA] Failed to save subscription to Supabase:', err);
+    console.warn('[CueX PWA] Failed to save subscription via edge function:', err);
     return false;
   }
 }
 
-// ─── Request Notification Permission + Subscribe to Push ──────────────────
+// ─── Request Notification Permission + Subscribe Admin ────────────────────
 export async function setupPushSubscription(): Promise<PushSubscription | null> {
   if (typeof window === 'undefined' || !('Notification' in window)) {
     return null;
@@ -98,20 +130,13 @@ export async function setupPushSubscription(): Promise<PushSubscription | null> 
   if (!reg) return null;
 
   try {
-    let sub = await reg.pushManager.getSubscription();
-
-    if (!sub) {
-      sub = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY) as unknown as BufferSource,
-      });
-      console.info('[CueX PWA] New push subscription created:', sub.endpoint);
+    const sub = await getOrRenewSubscription(reg);
+    if (sub) {
+      await saveSubscriptionToBackend(sub, 'admin');
     }
-
-    await saveSubscriptionToBackend(sub);
     return sub;
   } catch (err) {
-    console.error('[CueX PWA] Push subscription failed:', err);
+    console.error('[CueX PWA] Admin push subscription failed:', err);
     return null;
   }
 }
@@ -154,10 +179,22 @@ export async function sendAdminPush(payload: {
   tag?: string;
 }): Promise<boolean> {
   try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (session?.access_token) {
+      headers['Authorization'] = `Bearer ${session.access_token}`;
+    }
+
     const res = await fetch(PUSH_FUNCTION_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      headers,
+      body: JSON.stringify({
+        ...payload,
+        action: 'notify',
+        target: 'admin',
+      }),
     });
     return res.ok;
   } catch (err) {
@@ -179,49 +216,10 @@ export async function setupCustomerPushSubscription(phone?: string): Promise<Pus
   if (!reg) return null;
 
   try {
-    let sub = await reg.pushManager.getSubscription();
-
-    if (!sub) {
-      sub = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY) as unknown as BufferSource,
-      });
+    const sub = await getOrRenewSubscription(reg);
+    if (sub) {
+      await saveSubscriptionToBackend(sub, 'customer', phone);
     }
-
-    const subJson = sub.toJSON();
-    if (subJson.endpoint && subJson.keys) {
-      const { data: authData } = await supabase.auth.getUser();
-      const userId = authData?.user?.id || null;
-      const cleanPhone = phone ? String(phone).replace(/\D/g, '').slice(-10) : null;
-
-      await supabase.from('cuex_push_subscriptions').upsert(
-        {
-          endpoint: subJson.endpoint,
-          p256dh: subJson.keys.p256dh,
-          auth: subJson.keys.auth,
-          user_id: userId,
-          phone: cleanPhone,
-          role: 'customer',
-          user_agent: navigator.userAgent,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: 'endpoint' }
-      );
-
-      await fetch(PUSH_FUNCTION_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'subscribe',
-          subscription: subJson,
-          user_id: userId,
-          phone: cleanPhone,
-          role: 'customer',
-          user_agent: navigator.userAgent,
-        }),
-      }).catch(() => {});
-    }
-
     return sub;
   } catch (err) {
     console.error('[CueX PWA] Customer push subscription failed:', err);
@@ -239,11 +237,20 @@ export async function sendCustomerPush(payload: {
   tag?: string;
 }): Promise<boolean> {
   try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (session?.access_token) {
+      headers['Authorization'] = `Bearer ${session.access_token}`;
+    }
+
     const res = await fetch(PUSH_FUNCTION_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         ...payload,
+        action: 'notify',
         target: 'customer',
       }),
     });
@@ -256,10 +263,8 @@ export async function sendCustomerPush(payload: {
 
 // ─── Test Background Push (Delayed so user can lock screen/close app) ──────
 export async function testBackgroundPush(delaySeconds: number = 4): Promise<void> {
-  // Ensure subscribed first
   await setupPushSubscription();
 
-  // Schedule push after delay
   setTimeout(async () => {
     await sendAdminPush({
       title: '🎱 CueX Booking Alert (Test)',

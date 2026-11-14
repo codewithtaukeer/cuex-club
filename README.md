@@ -90,7 +90,7 @@ CueX has exactly **THREE independently bookable setups**:
 ## 🛡️ 6. Admin Access & Owner Console
 
 - Protected URL: `/admin`
-- Authorized Accounts: Pre-configured for administrators in `cuex_admins` (e.g. `admin@nexus.io`).
+- Authorized Accounts: Configured for administrators in `cuex_admins` via Supabase SQL.
 - Features available to the owner:
   - Daily & monthly booking statistics
   - Live filterable bookings table (Today, Tomorrow, Status, Facility)

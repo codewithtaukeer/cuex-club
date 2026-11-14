@@ -316,7 +316,7 @@ export const AdminAppPage: React.FC = () => {
 
   const handleExtendHold = async (b: CuexBooking) => {
     try {
-      const { error } = await supabase.rpc('cuex_admin_extend_hold', { p_booking_id: b.id, p_extra_minutes: 15 });
+      const { error } = await supabase.rpc('cuex_admin_extend_hold', { p_booking_id: b.id, p_additional_minutes: 15 });
       if (error) throw error;
       showFeedback('success', 'Hold extended by 15 minutes.');
       loadData();
@@ -355,6 +355,11 @@ export const AdminAppPage: React.FC = () => {
     e.preventDefault();
     if (!manualName.trim() || !manualPhone.trim() || !manualDate || !manualTime) {
       showFeedback('error', 'Fill in all fields.');
+      return;
+    }
+    const cleanDigits = manualPhone.replace(/\D/g, '').slice(-10);
+    if (cleanDigits.length !== 10) {
+      showFeedback('error', 'Please enter a valid 10-digit mobile number.');
       return;
     }
     setSavingManual(true);
