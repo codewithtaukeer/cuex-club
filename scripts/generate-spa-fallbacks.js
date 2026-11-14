@@ -19,35 +19,11 @@ if (!fs.existsSync(indexPath)) {
 
 const indexHtml = fs.readFileSync(indexPath, 'utf-8');
 
-// List of all SPA client-side routes
-const spaRoutes = [
-  'admin',
-  'admin-app',
-  'booking',
-  'availability',
-  'gallery',
-  'about',
-  'contact',
-  'auth',
-  'my-bookings',
-];
-
-console.log('[CueX Fallbacks] Generating static directory fallbacks for SPA routes...');
-
-// 1. Create dist/404.html so static hosts that fall back to 404.html render the SPA
+// 1. Create dist/404.html for static servers that fall back to 404.html
 const fallback404Path = path.join(distDir, '404.html');
 fs.writeFileSync(fallback404Path, indexHtml, 'utf-8');
-console.log('  ✓ Created dist/404.html');
+console.log('[CueX Fallbacks] ✓ Created dist/404.html (SPA Fallback)');
 
-// 2. Create index.html inside each route directory
-for (const route of spaRoutes) {
-  const routeDir = path.join(distDir, route);
-  if (!fs.existsSync(routeDir)) {
-    fs.mkdirSync(routeDir, { recursive: true });
-  }
-  const routeIndexPath = path.join(routeDir, 'index.html');
-  fs.writeFileSync(routeIndexPath, indexHtml, 'utf-8');
-  console.log(`  ✓ Created dist/${route}/index.html`);
-}
-
-console.log('[CueX Fallbacks] All SPA routes now have native static fallbacks. Zero 404 guarantee!');
+// Note: We deliberately do NOT create physical subdirectories (e.g. dist/my-bookings/index.html)
+// because web servers and Cloudflare interpret directories as needing 307 trailing-slash redirects,
+// which breaks Service Worker navigation in browsers. wrangler.jsonc handles SPA routing natively.

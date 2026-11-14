@@ -1,36 +1,26 @@
-// CueX Admin Service Worker
-// Version: cuex-pwa-v3
-// Handles: Push Notifications, Offline Navigation Fallback, Background Sync
+// CueX Service Worker
+// Version: cuex-pwa-v4
+// Handles: Push Notifications, Rock-Solid SPA Navigation Fallback, Background Sync
 
-const CACHE_NAME = 'cuex-pwa-v3';
+const CACHE_NAME = 'cuex-pwa-v4';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
-  '/admin-app',
-  '/admin',
-  '/booking',
-  '/availability',
-  '/gallery',
-  '/about',
-  '/contact',
-  '/auth',
-  '/my-bookings',
   '/manifest.json',
   '/assets/cuex-logo.png',
   '/assets/notification.wav',
   '/favicon.svg',
 ];
 
-// ─── Install: Pre-cache SPA routes & core assets ─────────────────────────────
+// ─── Install: Pre-cache SPA core shell ─────────────────────────────────────
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      // Use individual puts so a single route failure doesn't break cache installation
       return Promise.allSettled(
         STATIC_ASSETS.map((url) =>
           fetch(url, { cache: 'no-cache' })
             .then((res) => {
-              if (res.ok) return cache.put(url, res);
+              if (res.ok && !res.redirected) return cache.put(url, res);
             })
             .catch(() => {})
         )
@@ -40,7 +30,7 @@ self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
 
-// ─── Activate: Purge old caches & take control ───────────────────────────────
+// ─── Activate: Purge old caches & claim immediately ─────────────────────────
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
@@ -50,7 +40,7 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// ─── Fetch: SPA Navigation Fallback + Asset Caching ──────────────────────────
+// ─── Fetch: Bulletproof SPA Navigation & Static Assets ─────────────────────
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
@@ -63,49 +53,75 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 1. SPA Navigation Requests (e.g., opening app, typing URL, page refresh)
-  // NEVER let a navigation request return 404!
+  // 1. SPA Navigation Requests (e.g., address bar, link navigation, page refresh)
+  // MUST NEVER fail with ERR_FAILED or show a broken page
   if (event.request.mode === 'navigate') {
     event.respondWith(
-      fetch(event.request)
-        .then((response) => {
-          // If server returned 404 or an error, serve cached index.html so React Router takes over!
-          if (!response || response.status === 404 || !response.ok) {
-            return caches.match('/index.html')
-              .then((cached) => cached || caches.match('/') || response);
+      (async () => {
+        try {
+          // Attempt network fetch
+          const networkResponse = await fetch(event.request);
+
+          // If clean 200 OK non-redirected response, cache /index.html and return
+          if (networkResponse && networkResponse.status === 200 && !networkResponse.redirected) {
+            try {
+              const cache = await caches.open(CACHE_NAME);
+              cache.put('/index.html', networkResponse.clone()).catch(() => {});
+            } catch {}
+            return networkResponse;
           }
-          // Cache successful navigation response for offline
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-          return response;
-        })
-        .catch(async () => {
-          // Network failed or offline:
-          // Try matching this specific route first, then fall back to /index.html or /
-          const routeMatch = await caches.match(event.request);
-          if (routeMatch) return routeMatch;
-          const indexMatch = await caches.match('/index.html');
-          if (indexMatch) return indexMatch;
-          const rootMatch = await caches.match('/');
-          if (rootMatch) return rootMatch;
-          return new Response('<!DOCTYPE html><html><body><h1>CueX Offline</h1><p>Please reconnect to the internet.</p></body></html>', {
-            status: 200,
-            headers: { 'Content-Type': 'text/html' }
-          });
-        })
+
+          // If server returned a redirect (e.g. 307 trailing slash) or 404:
+          // In W3C specification, returning a redirected response to top-level navigation can trigger ERR_FAILED in Chrome.
+          // In an SPA, all routes (/my-bookings, /admin, etc.) are rendered by /index.html!
+          const cachedIndex =
+            (await caches.match('/index.html')) || (await caches.match('/'));
+          if (cachedIndex) {
+            return cachedIndex;
+          }
+
+          // If not cached, fetch clean /index.html directly without route parameters
+          const cleanIndex = await fetch('/index.html', { cache: 'no-cache' });
+          if (cleanIndex.ok) {
+            return cleanIndex;
+          }
+
+          return networkResponse;
+        } catch {
+          // Offline or network error: return cached SPA shell
+          const cachedIndex =
+            (await caches.match('/index.html')) || (await caches.match('/'));
+          if (cachedIndex) {
+            return cachedIndex;
+          }
+
+          return new Response(
+            '<!DOCTYPE html><html><head><meta charset="utf-8"><title>CueX</title></head><body style="background:#0e100f;color:#e8e4dc;font-family:sans-serif;text-align:center;padding:50px;"><h2>CueX Offline</h2><p>Please check your connection and refresh.</p><button onclick="location.reload()" style="padding:10px 20px;background:#c8a45d;border:none;border-radius:8px;font-weight:bold;cursor:pointer;">Retry</button></body></html>',
+            {
+              status: 200,
+              headers: { 'Content-Type': 'text/html' },
+            }
+          );
+        }
+      })()
     );
     return;
   }
 
   // 2. Static Assets (JS chunks, CSS, images, fonts)
-  // Stale-While-Revalidate: serve cached version immediately, update cache in background
+  // Stale-While-Revalidate with error suppression
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
       const fetchPromise = fetch(event.request)
         .then((networkResponse) => {
-          if (networkResponse.ok && (networkResponse.type === 'basic' || networkResponse.type === 'cors')) {
+          if (
+            networkResponse &&
+            networkResponse.ok &&
+            !networkResponse.redirected &&
+            (networkResponse.type === 'basic' || networkResponse.type === 'cors')
+          ) {
             const clone = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone)).catch(() => {});
           }
           return networkResponse;
         })

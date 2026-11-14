@@ -8,7 +8,7 @@ import { formatToIST, formatDateIST, formatINR, generateGoogleCalendarUrl, VENUE
 import { BookingInvoiceModal } from '../components/booking/BookingInvoiceModal';
 
 export const MyBookingsPage: React.FC = () => {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [bookings, setBookings] = useState<CuexBooking[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedInvoiceBooking, setSelectedInvoiceBooking] = useState<CuexBooking | null>(null);
@@ -63,14 +63,17 @@ export const MyBookingsPage: React.FC = () => {
   };
 
   useEffect(() => {
+    if (authLoading) return;
+
     if (user) {
       fetchBookings();
     } else if (phoneLookup && phoneLookup.length >= 10) {
       fetchBookings(phoneLookup, refLookup);
     } else {
       setBookings([]);
+      setLoading(false);
     }
-  }, [user]);
+  }, [user, authLoading]);
 
   return (
     <div className="min-h-screen bg-obsidian pt-28 pb-24 text-warmivory">
@@ -185,7 +188,17 @@ export const MyBookingsPage: React.FC = () => {
         </div>
 
         {/* Bookings List */}
-        {bookings.length === 0 ? (
+        {authLoading || loading ? (
+          <div className="space-y-4">
+            {[1, 2].map((i) => (
+              <div key={i} className="rounded-2xl bg-charcoal/40 border border-white/5 p-6 animate-pulse">
+                <div className="h-6 w-1/3 bg-white/10 rounded mb-4" />
+                <div className="h-4 w-2/3 bg-white/5 rounded mb-2" />
+                <div className="h-4 w-1/2 bg-white/5 rounded" />
+              </div>
+            ))}
+          </div>
+        ) : bookings.length === 0 ? (
           <div className="rounded-3xl bg-charcoal/60 border border-white/10 p-12 text-center">
             <div className="w-16 h-16 rounded-full bg-champagne/10 border border-champagne/30 flex items-center justify-center mx-auto mb-4 text-champagne">
               <Calendar className="w-7 h-7" />
