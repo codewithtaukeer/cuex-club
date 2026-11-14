@@ -6,6 +6,7 @@ import { useAuth } from '../../context/AuthContext';
 import type { ResourceType, AvailabilitySlot, CuexBooking } from '../../types';
 import { formatToIST, formatDateIST, formatINR, getISTDateString } from '../../lib/utils';
 import { BookingSuccessModal } from './BookingSuccessModal';
+import { sendAdminPush } from '../../lib/pwa';
 
 const VALID_FACILITIES: ResourceType[] = ['ps5', 'pool', 'snooker'];
 
@@ -196,7 +197,16 @@ export const MobileBookingFlow: React.FC = () => {
         // ignore localStorage errors
       }
 
-      setConfirmedBooking(data as CuexBooking);
+      const newBooking = data as CuexBooking;
+      setConfirmedBooking(newBooking);
+
+      // Dispatch real-time web push notification to all admin devices (even when app/browser is closed)
+      sendAdminPush({
+        title: '🎱 New CueX Booking Request!',
+        body: `${trimmedName} (${cleanPhone}) requested ${selectedFacility.toUpperCase()} for ${formatINR(newBooking?.total_amount || 0)}`,
+        url: '/admin-app?tab=pending',
+        tag: 'cuex-booking-' + (newBooking?.id || Date.now()),
+      }).catch(() => {});
     } catch (err: any) {
       console.error('Booking failed:', err);
       setErrorMsg(err.message || 'Could not complete booking. Please try another slot.');

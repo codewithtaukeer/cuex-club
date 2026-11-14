@@ -1,8 +1,8 @@
 // CueX Admin Service Worker
-// Version: cuex-pwa-v2
+// Version: cuex-pwa-v3
 // Handles: Push Notifications, Offline Navigation Fallback, Background Sync
 
-const CACHE_NAME = 'cuex-pwa-v2';
+const CACHE_NAME = 'cuex-pwa-v3';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -17,6 +17,7 @@ const STATIC_ASSETS = [
   '/my-bookings',
   '/manifest.json',
   '/assets/cuex-logo.png',
+  '/assets/notification.wav',
   '/favicon.svg',
 ];
 
@@ -134,14 +135,16 @@ self.addEventListener('push', (event) => {
 
   const options = {
     body: data.body,
-    icon: data.icon,
-    badge: data.badge,
-    tag: data.tag,
+    icon: data.icon || '/assets/cuex-logo.png',
+    badge: data.badge || '/assets/cuex-logo.png',
+    tag: data.tag || 'cuex-booking',
     renotify: true,
     requireInteraction: true,
-    vibrate: [200, 100, 300, 100, 200],
+    silent: false,
+    vibrate: [300, 150, 300, 150, 500],
+    sound: '/assets/notification.wav',
     actions: [
-      { action: 'view', title: '✅ View & Confirm' },
+      { action: 'view', title: '🎱 View & Confirm' },
       { action: 'dismiss', title: '✕ Dismiss' },
     ],
     data: { url: data.url || '/admin-app?tab=pending' },

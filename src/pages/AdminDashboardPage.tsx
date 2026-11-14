@@ -40,6 +40,7 @@ import {
   requestNotificationPermission, 
   showBrowserNotification 
 } from '../lib/notificationSound';
+import { registerServiceWorker, setupPushSubscription } from '../lib/pwa';
 
 function statusColour(status: string): string {
   switch (status) {
@@ -153,6 +154,9 @@ export const AdminDashboardPage: React.FC = () => {
   useEffect(() => {
     if (!authLoading && (!user || !isAdmin)) {
       navigate('/auth?redirect=/admin');
+    } else if (isAdmin) {
+      registerServiceWorker();
+      setupPushSubscription();
     }
   }, [user, isAdmin, authLoading, navigate]);
 

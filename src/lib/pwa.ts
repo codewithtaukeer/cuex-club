@@ -2,28 +2,24 @@
  * CueX PWA Manager
  * - Registers the service worker
  * - Handles Web Push subscription (VAPID)
- * - Provides hooks for subscribing/unsubscribing
- * 
- * NOTE: For background push (app closed), you need a push server.
- * This file sets up the client side. The push will be triggered
- * via Supabase Edge Function or a simple Node server.
- * 
- * For immediate use WITHOUT a push server, the service worker still
- * handles: install-to-homescreen, offline caching, and foreground
- * notification display via Notification API (which works while the
- * app is open). True background push requires a server sending
- * PushEvent — see setupPushSubscription() below.
+ * - Persists admin subscriptions in Supabase
+ * - Triggers background notifications even when app/browser is completely closed
  */
+import { supabase } from './supabase';
 
-// VAPID public key — generate at https://vapidkeys.com or use web-push CLI
-// Replace this with your real key when you set up a push server
-export const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY || '';
+// VAPID public key with fallback to CueX production key
+export const VAPID_PUBLIC_KEY =
+  import.meta.env.VITE_VAPID_PUBLIC_KEY ||
+  'BETjBu9ielhfbIVwiiX-4KrxcxkfqhNPMDSeBEGUsytXrurVANe91AApv4eNLMFKYEb1hnnEhoz9oBfU5ZfTF5k';
+
+const PUSH_FUNCTION_URL =
+  'https://vetyyyemzhqinqoeqakz.supabase.co/functions/v1/notify-admin-booking';
 
 let swRegistration: ServiceWorkerRegistration | null = null;
 
 // ─── Register Service Worker ───────────────────────────────────────────────
 export async function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
-  if (!('serviceWorker' in navigator)) {
+  if (typeof window === 'undefined' || !('serviceWorker' in navigator)) {
     console.warn('[CueX PWA] Service workers not supported.');
     return null;
   }
@@ -42,35 +38,77 @@ export async function registerServiceWorker(): Promise<ServiceWorkerRegistration
 // ─── Get Active Registration ───────────────────────────────────────────────
 export async function getSwRegistration(): Promise<ServiceWorkerRegistration | null> {
   if (swRegistration) return swRegistration;
-  if (!('serviceWorker' in navigator)) return null;
+  if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return null;
   swRegistration = (await navigator.serviceWorker.getRegistration('/')) || null;
   return swRegistration;
 }
 
+// ─── Persist Push Subscription to Supabase ─────────────────────────────────
+async function saveSubscriptionToBackend(sub: PushSubscription): Promise<boolean> {
+  try {
+    const subJson = sub.toJSON();
+    if (!subJson.endpoint || !subJson.keys) return false;
+
+    const { data: authData } = await supabase.auth.getUser();
+    const userId = authData?.user?.id || null;
+
+    // 1. Direct DB upsert
+    await supabase.from('cuex_push_subscriptions').upsert(
+      {
+        endpoint: subJson.endpoint,
+        p256dh: subJson.keys.p256dh,
+        auth: subJson.keys.auth,
+        user_id: userId,
+        user_agent: navigator.userAgent,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'endpoint' }
+    );
+
+    // 2. Also notify Edge Function
+    await fetch(PUSH_FUNCTION_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'subscribe',
+        subscription: subJson,
+        user_id: userId,
+        user_agent: navigator.userAgent,
+      }),
+    }).catch(() => {});
+
+    console.info('[CueX PWA] Push subscription saved to Supabase');
+    return true;
+  } catch (err) {
+    console.warn('[CueX PWA] Failed to save subscription to Supabase:', err);
+    return false;
+  }
+}
+
 // ─── Request Notification Permission + Subscribe to Push ──────────────────
 export async function setupPushSubscription(): Promise<PushSubscription | null> {
-  if (!VAPID_PUBLIC_KEY) {
-    // No VAPID key set — foreground Notification API still works
-    console.warn('[CueX PWA] No VAPID_PUBLIC_KEY set; background push unavailable.');
+  if (typeof window === 'undefined' || !('Notification' in window)) {
     return null;
   }
 
   const permission = await Notification.requestPermission();
   if (permission !== 'granted') return null;
 
-  const reg = await getSwRegistration();
+  const reg = await registerServiceWorker();
   if (!reg) return null;
 
   try {
-    const existing = await reg.pushManager.getSubscription();
-    if (existing) return existing;
+    let sub = await reg.pushManager.getSubscription();
 
-    const sub = await reg.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY) as unknown as BufferSource,
-    });
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY) as unknown as BufferSource,
+      });
+      console.info('[CueX PWA] New push subscription created:', sub.endpoint);
+    }
 
-    console.info('[CueX PWA] Push subscription created:', sub.endpoint);
+    await saveSubscriptionToBackend(sub);
     return sub;
   } catch (err) {
     console.error('[CueX PWA] Push subscription failed:', err);
@@ -78,7 +116,73 @@ export async function setupPushSubscription(): Promise<PushSubscription | null> 
   }
 }
 
-// ─── Show Notification via Service Worker (works when tab not focused) ─────
+// ─── Check Current Push Status ─────────────────────────────────────────────
+export async function getPushSubscriptionStatus(): Promise<{
+  supported: boolean;
+  permission: NotificationPermission;
+  subscribed: boolean;
+  endpoint: string | null;
+}> {
+  if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('Notification' in window)) {
+    return { supported: false, permission: 'denied', subscribed: false, endpoint: null };
+  }
+
+  const permission = Notification.permission;
+  const reg = await getSwRegistration();
+  if (!reg) {
+    return { supported: true, permission, subscribed: false, endpoint: null };
+  }
+
+  try {
+    const sub = await reg.pushManager.getSubscription();
+    return {
+      supported: true,
+      permission,
+      subscribed: !!sub,
+      endpoint: sub ? sub.endpoint : null,
+    };
+  } catch {
+    return { supported: true, permission, subscribed: false, endpoint: null };
+  }
+}
+
+// ─── Send Push Notification to All Admin Devices ───────────────────────────
+export async function sendAdminPush(payload: {
+  title: string;
+  body: string;
+  url?: string;
+  tag?: string;
+}): Promise<boolean> {
+  try {
+    const res = await fetch(PUSH_FUNCTION_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return res.ok;
+  } catch (err) {
+    console.error('[CueX PWA] Failed to dispatch admin push:', err);
+    return false;
+  }
+}
+
+// ─── Test Background Push (Delayed so user can lock screen/close app) ──────
+export async function testBackgroundPush(delaySeconds: number = 4): Promise<void> {
+  // Ensure subscribed first
+  await setupPushSubscription();
+
+  // Schedule push after delay
+  setTimeout(async () => {
+    await sendAdminPush({
+      title: '🎱 CueX Booking Alert (Test)',
+      body: 'Background notifications are working! You will receive alerts even when CueX is closed.',
+      url: '/admin-app?tab=pending',
+      tag: 'cuex-test-' + Date.now(),
+    });
+  }, delaySeconds * 1000);
+}
+
+// ─── Show Notification via Service Worker (Foreground/Background tab) ─────
 export async function showSwNotification(title: string, body: string, url = '/admin'): Promise<void> {
   const permission = await Notification.requestPermission();
   if (permission !== 'granted') return;
@@ -92,11 +196,11 @@ export async function showSwNotification(title: string, body: string, url = '/ad
       tag: 'cuex-booking',
       renotify: true,
       requireInteraction: true,
-      vibrate: [200, 100, 300],
+      silent: false,
+      vibrate: [300, 150, 300, 150, 500],
       data: { url },
     } as NotificationOptions);
   } else {
-    // Fallback: direct Notification API
     new Notification(title, { body, icon: '/assets/cuex-logo.png' });
   }
 }
@@ -111,6 +215,7 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
 
 // ─── Check if installed as PWA ─────────────────────────────────────────────
 export function isPwa(): boolean {
+  if (typeof window === 'undefined') return false;
   return (
     window.matchMedia('(display-mode: standalone)').matches ||
     (window.navigator as unknown as { standalone?: boolean }).standalone === true
@@ -132,7 +237,7 @@ export async function promptPwaInstall(): Promise<'accepted' | 'dismissed' | 'un
   await deferredInstallPrompt.prompt();
   const choice = await deferredInstallPrompt.userChoice;
   deferredInstallPrompt = null;
-  return (choice?.outcome === 'accepted') ? 'accepted' : 'dismissed';
+  return choice?.outcome === 'accepted' ? 'accepted' : 'dismissed';
 }
 
 export function canInstallPwa(): boolean {

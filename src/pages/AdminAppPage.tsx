@@ -16,7 +16,16 @@ import {
   playWhatsAppSound, primeAudioContext,
   requestNotificationPermission, showBrowserNotification,
 } from '../lib/notificationSound';
-import { registerServiceWorker, showSwNotification, canInstallPwa, promptPwaInstall, isPwa } from '../lib/pwa';
+import {
+  registerServiceWorker,
+  setupPushSubscription,
+  getPushSubscriptionStatus,
+  testBackgroundPush,
+  showSwNotification,
+  canInstallPwa,
+  promptPwaInstall,
+  isPwa,
+} from '../lib/pwa';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 type AdminTab = 'home' | 'pending' | 'bookings' | 'collection' | 'controls' | 'settings';
@@ -65,6 +74,16 @@ export const AdminAppPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [showInstallBanner, setShowInstallBanner] = useState(false);
+  const [pushStatus, setPushStatus] = useState<{
+    supported: boolean;
+    permission: NotificationPermission;
+    subscribed: boolean;
+  }>({
+    supported: true,
+    permission: typeof Notification !== 'undefined' ? Notification.permission : 'default',
+    subscribed: false,
+  });
+  const [testingPush, setTestingPush] = useState(false);
 
   // Controls Sub-tab
   const [controlsSubTab, setControlsSubTab] = useState<'rates' | 'dayoff' | 'walkin' | 'maintenance'>('rates');
@@ -135,16 +154,26 @@ export const AdminAppPage: React.FC = () => {
     }
   }, [searchParams]);
 
-  // ─── PWA Setup ────────────────────────────────────────────────────────────
+  // ─── PWA & Push Setup ────────────────────────────────────────────────────
+  const refreshPushStatus = useCallback(async () => {
+    try {
+      const status = await getPushSubscriptionStatus();
+      setPushStatus(status);
+    } catch {}
+  }, []);
+
   useEffect(() => {
     registerServiceWorker();
-    requestNotificationPermission();
+    setupPushSubscription().then(() => {
+      refreshPushStatus();
+    });
     if (!isPwa() && canInstallPwa()) setShowInstallBanner(true);
     const timer = setTimeout(() => {
       if (!isPwa() && canInstallPwa()) setShowInstallBanner(true);
+      refreshPushStatus();
     }, 2000);
     return () => clearTimeout(timer);
-  }, []);
+  }, [refreshPushStatus]);
 
   // ─── Load Data ────────────────────────────────────────────────────────────
   const fetchSchedule = useCallback(async () => {
@@ -1929,6 +1958,73 @@ export const AdminAppPage: React.FC = () => {
 
   const SettingsTab = () => (
     <div className="space-y-4">
+      {/* Background Push Notifications (When App Is Closed) */}
+      <div className="p-4 rounded-2xl bg-gradient-to-br from-cuexemerald/15 via-white/5 to-white/2 border border-cuexemerald/30 space-y-3 shadow-lg">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className={`p-2.5 rounded-xl ${pushStatus.subscribed ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'} shrink-0`}>
+              <BellRing className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-bold text-warmivory">Background Notifications</p>
+                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${pushStatus.subscribed ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'}`}>
+                  {pushStatus.subscribed ? 'Active' : 'Setup Needed'}
+                </span>
+              </div>
+              <p className="text-[11px] text-mutedgrey mt-0.5">
+                Delivers booking requests even when CueX is completely closed or your screen is locked.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Enable / Refresh button */}
+        {!pushStatus.subscribed && (
+          <button
+            onClick={async () => {
+              const sub = await setupPushSubscription();
+              await refreshPushStatus();
+              if (sub) {
+                showFeedback('success', '🔔 Background Push enabled! This device will receive alerts when closed.');
+              } else {
+                showFeedback('error', 'Notification permission was denied or blocked in browser settings.');
+              }
+            }}
+            className="w-full py-3 rounded-xl bg-emerald-500 text-obsidian font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-gold-glow"
+          >
+            <CheckCircle2 className="w-4 h-4" />
+            Enable Background Notifications on This Phone
+          </button>
+        )}
+
+        {/* Test Background Push Button */}
+        <button
+          disabled={testingPush}
+          onClick={async () => {
+            setTestingPush(true);
+            showFeedback('success', '⏳ Test scheduled! Close CueX or lock phone NOW (fires in 5 sec)');
+            try {
+              await testBackgroundPush(5);
+            } finally {
+              setTimeout(() => setTestingPush(false), 6000);
+            }
+          }}
+          className={`w-full py-3.5 rounded-xl border font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
+            testingPush
+              ? 'bg-amber-500/20 border-amber-500/40 text-amber-300 animate-pulse'
+              : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25'
+          }`}
+        >
+          <Bell className="w-4 h-4" />
+          {testingPush ? '⏳ Firing in 5s... Lock your phone now!' : 'Test Background Alert (5-Sec Delay)'}
+        </button>
+
+        <p className="text-[10px] text-mutedgrey text-center italic">
+          Tap the button above, then immediately swipe away the app or press the power button to lock your screen!
+        </p>
+      </div>
+
       {/* Sound control */}
       <div className="p-4 rounded-2xl bg-white/4 border border-white/8 flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
@@ -1936,7 +2032,7 @@ export const AdminAppPage: React.FC = () => {
             {soundEnabled ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
           </div>
           <div>
-            <p className="text-sm font-bold text-warmivory">Sound Alerts</p>
+            <p className="text-sm font-bold text-warmivory">In-App Chime Sound</p>
             <p className="text-[11px] text-mutedgrey">{soundEnabled ? 'WhatsApp chime active' : 'Muted'}</p>
           </div>
         </div>
@@ -1954,8 +2050,29 @@ export const AdminAppPage: React.FC = () => {
       {/* Test sound */}
       <button onClick={() => { primeAudioContext(); playWhatsAppSound(); requestNotificationPermission(); showFeedback('success', '🔊 Sound tested!'); }}
         className="w-full py-3.5 rounded-xl bg-champagne/10 border border-champagne/30 text-champagne font-bold text-sm uppercase tracking-wider flex items-center justify-center gap-2">
-        <Volume2 className="w-4 h-4" />Test Sound Alert
+        <Volume2 className="w-4 h-4" />Test Chime Sound Now
       </button>
+
+      {/* Troubleshooting guide */}
+      <div className="p-4 rounded-2xl bg-white/3 border border-white/8 space-y-2.5">
+        <p className="text-xs font-bold text-champagne flex items-center gap-1.5">
+          <AlertTriangle className="w-3.5 h-3.5" />Why notifications might not sound on your phone:
+        </p>
+        <ul className="text-[11px] text-mutedgrey space-y-1.5 list-disc list-inside">
+          <li>
+            <strong className="text-warmivory">Notification Volume:</strong> Ensure phone sound profile is set to <strong className="text-warmivory">Ring</strong> (not Silent / Vibrate / Do Not Disturb) and Notification Volume is turned up.
+          </li>
+          <li>
+            <strong className="text-warmivory">Android Chrome Settings:</strong> Go to phone <strong className="text-warmivory">Settings → Apps → Chrome → Notifications</strong>. Make sure <strong className="text-warmivory">Allow sound and vibration</strong> is enabled, not "Silent".
+          </li>
+          <li>
+            <strong className="text-warmivory">Battery Saver:</strong> Some phones (Xiaomi/Realme/Oppo/Samsung) put apps to sleep. Allow Chrome or CueX to run in background.
+          </li>
+          <li>
+            <strong className="text-warmivory">iPhone (iOS):</strong> Push notifications require tapping Safari Share → <strong className="text-warmivory">"Add to Home Screen"</strong>, then opening CueX from the home screen icon.
+          </li>
+        </ul>
+      </div>
 
       {/* Install PWA */}
       <div className="p-4 rounded-2xl bg-white/4 border border-white/8 space-y-3">
@@ -1965,7 +2082,7 @@ export const AdminAppPage: React.FC = () => {
           </div>
           <div>
             <p className="text-sm font-bold text-warmivory">Install as App</p>
-            <p className="text-[11px] text-mutedgrey mt-0.5">Add to home screen for instant access and background push notifications when a booking comes in.</p>
+            <p className="text-[11px] text-mutedgrey mt-0.5">Add to home screen for instant access and native app-like experience.</p>
           </div>
         </div>
         {isPwa() ? (
